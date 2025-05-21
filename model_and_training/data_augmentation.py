@@ -1,6 +1,6 @@
 from pathlib import Path
 import random
-from typing import Dict, Tuple, Optional, Union, List, Generator
+from typing import Tuple, Optional, Union, List, Generator
 
 import scipy.stats
 import torch
@@ -8,7 +8,7 @@ import torchio as tio
 import skimage.morphology as morph
 import numpy as np
 from scipy.ndimage import center_of_mass
-from copy import copy
+from copy import deepcopy
 import warnings
 
 
@@ -61,11 +61,12 @@ def gaussian_func(x: Union[np.ndarray, torch.Tensor], sigma: Union[float, np.nda
 
     return z
 
+
 class LesionSCynth(tio.Transform):
     r"""Randomly add predefined lesion shapes by increasing contrast.
     Args:
         factor_distribution: a scipy.stats.rv_continuous distribution to sample the intensity factor from.
-        modalities: a list of modality names to add the lesions to.
+        modalities: a list of modality names to add the lesions to, corresponding to the keys in the tio subjects.
         lesion_dir: a directory containing the binary lesion masks to add.
                     If lesion_dir is provided, the lesion masks should be saved as '.nii.gz' and should contain 'seg'.
                     Either lesion_dir or lesion_paths must be provided.
@@ -75,14 +76,17 @@ class LesionSCynth(tio.Transform):
         dilate_erode_probability: the probability of dilating or eroding the lesion mask. Default: 0.5.
         other_transforms: an optional tio.Transform to apply to the lesion mask.
         multimodality_probability: the probability of adding the lesion to more than one modality. Default: 0.5.
+                                   Only applies if more than one modality is provided.
         gaussian_spatial: if True, intensity increase will be modelled spatially by a Gaussian function. Default: False.
         min_factor_gaussian: the minimum increase factor to use for the Gaussian intensity increase. Default: 0.0.
         gaussian_sigma: the standard deviation of the Gaussian function to model the intensity increase spatially.
                         Default: None. Sampled randomly for each dimension, based on the length of the lesion.
         blur_radius: the radius of the Gaussian blur to apply to the input image in the lesion area. Default: None.
+                     if None, then no blur is applied.
         blur_sigma: the sigma of the Gaussian blur to apply to the input image in the lesion area. Default: None.
         n_lesions_dist: an optional generator to sample the number of lesions to add. Should be iterable with next()
-                        and should return an integer. Default: None.
+                        and should return an integer. Default: None. By default, a random number between 0 and 8 is
+                        chosen.
         fixed_synthetic_lesions: if True, the same lesions will be added to the same subject each time. Default: False.
         **kwargs: See :class:`~torchio.transforms.Transform` for additional keyword arguments.
     """
@@ -125,6 +129,8 @@ class LesionSCynth(tio.Transform):
         self.gaussian_spatial = gaussian_spatial
         self.min_factor_gaussian = min_factor_gaussian
         self.gaussian_sigma = gaussian_sigma
+        assert (blur_sigma is not None) != (blur_radius is not None), \
+            'Both blur_sigma and blur_radius must be provided or neither.'
         self.blur_radius = blur_radius
         self.blur_sigma = blur_sigma
 
@@ -152,7 +158,7 @@ class LesionSCynth(tio.Transform):
                    f'{max_iter} iterations. ')
             warnings.warn(msg)
 
-    def model_lesion_gaussian(self, mask: tio.LabelMap) -> Tuple
+    def model_lesion_gaussian(self, mask: tio.LabelMap) -> Tuple[np.ndarray, np.ndarray]:
         """ Based on a given mask shape, use a Gaussian function to model the intensity increase.
         The Gaussian will be maximal (1.0) at the centroid of the mask and will decay towards the edges. 
         The speed of decay is controlled by sigma and is sampled for each dimension from a uniform distribution between
@@ -160,8 +166,8 @@ class LesionSCynth(tio.Transform):
         Args:
             mask: a torchio.LabelMap instance containing the binary lesion mask to use.
         Returns:
-        	gaussians: a numpy array containing the Gaussian function evaluated at all points in the mask image.
-			sigma: the standard deviation(s) used in the Gaussian function.
+            gaussians: a numpy array containing the Gaussian function evaluated at all points in the mask image.
+            sigma: the standard deviation(s) used in the Gaussian function.
         """
         bounds = get_bbox_bounds(mask.data[0].numpy())
         # Get the length/extent of the mask in each dimension
@@ -209,45 +215,93 @@ class LesionSCynth(tio.Transform):
         # Only keep the blurred values within the dilated segmentation mask
         return inp * (1 - dilated_seg) + torch.Tensor(blurred) * dilated_seg
 
-    def get_kernel(self, lesion_im):
+    def get_intensity_increase(self, lesion_im: tio.LabelMap) -> Tuple[torch.Tensor, float, Optional[float]]:
+        """ Get the intensity increase factor for the lesion. If self.gaussian_spatial is True, the intensity increase
+        will be modelled spatially by a Gaussian function. If False, the intensity increase will be constant across the
+        lesion mask.
+        Args:
+            lesion_im: a torchio.LabelMap instance containing the binary lesion mask where the lesion will be created.
+        Returns:
+            intensity_increase: a torch.Tensor containing the Gaussian function evaluated at all points in the mask
+                                image or a constant value.
+            factor: the intensity increase factor.
+            sigma: the standard deviation(s) used in the Gaussian function.
+        """
         # Choose a random intensity factor
         factor = self.factor_dist.rvs()
         if self.gaussian_spatial:
-            gaussian_kernel, sigma = self.model_lesion_gaussian(lesion_im)
-            gaussian_kernel = torch.Tensor(gaussian_kernel)
-            avg_factor = (gaussian_kernel * lesion_im.data).sum() / lesion_im.data.sum()
+            gaussian, sigma = self.model_lesion_gaussian(lesion_im)
+            gaussian = torch.Tensor(gaussian)
+            # Calculate the average intensity increase with amplitude=1.0, and then scale it to achieve the desired
+            # average intensity increase factor.
+            avg_factor = (gaussian * lesion_im.data).sum() / lesion_im.data.sum()
             amplitude = factor / avg_factor
-            intensity_kernel = torch.Tensor(amplitude * gaussian_kernel)
+            intensity_increase = torch.Tensor(amplitude * gaussian)
             # Set a contant minimum factor, since the Gaussian can decay close to zero at the edges, and we want to
             # maintain some intensity increase everywhere within the mask
-            intensity_kernel[intensity_kernel < self.min_factor_gaussian] = self.min_factor_gaussian
+            intensity_increase[intensity_increase < self.min_factor_gaussian] = self.min_factor_gaussian
         else:
-            intensity_kernel = torch.Tensor([factor])
+            intensity_increase = torch.Tensor([factor])
             sigma = None
-        return intensity_kernel, factor, sigma
+        return intensity_increase, factor, sigma
 
-    def update_intensity(self, subject, lesion_im, intensity_factor, modality_name, z):
-        # Increase the intensity by the Gaussian within the lesion mask area
+    @staticmethod
+    def update_intensity(subject, lesion_im, intensity_increase, modality_name, z):
+        """
+        Update the intensity of the input image by increasing the intensity within the lesion mask area.
+        Args:
+            subject: tio.Subject instance containing the intensity image to augment, and the spinal cord
+                     segmentation (named 'sc_seg').
+            lesion_im: a torchio.LabelMap instance containing the binary lesion mask to use, cropped to the bounding
+                       box of the lesion along the z-axis.
+            intensity_increase: a torch.Tensor used for the multiplicative intensity increase, containing either:
+                                1) a constant value for the entire lesion mask, or
+                                2) a Gaussian function (or other spatially varying function) evaluated at all points
+                                in the mask image, with same shape as lesion_im.
+            modality_name: the name of the modality in subject to augment. e.g. 'image' or 't2', etc.
+            z: the z-location where the lesion will be inserted into the input image in subject. This is the lower
+               bound of the new lesion.
+        Returns:
+            subject: the input subject with the intensity increased within the lesion mask area.
+        """
+        # Add the intensity increase to the relevant part of the image.
+        # 1. The increase is multiplied by the existing intensities.
+        # 2. The increase is multiplied by the lesion mask to ensure that the intensity is only increased within the
+        #    target lesion mask area.
+        # 3. The increase is multiplied by the spinal cord segmentation to ensure that the intensity is only increased
+        #    within the spinal cord area.
         subject[modality_name].data[..., z:z+lesion_im.shape[-1]] += (
             subject[modality_name].data[..., z:z+lesion_im.shape[-1]]
-            * intensity_factor
+            * intensity_increase
             * lesion_im.data
             * subject['sc_seg'].data[..., z:z+lesion_im.shape[-1]]  # Only add lesion to the SC
         )
-
         return subject
 
-    def update_subject_metadata(self, subject, metadata):
-        # TODO: Finish off
-        if 'lesion_aug_data' not in subject:
-            subject['lesion_aug_data'] = metadata
-        else:
-            for key, value in metadata.items():
-                if key in subject['lesion_aug_data']:
-                    if isinstance(subject['lesion_aug_data'][key], list):
-                        subject['lesion_aug_data'][key].append(value)
+    @staticmethod
+    def get_target_position(subject: tio.Subject, lesion_im: tio.LabelMap) -> int:
+        """ Get the target z-location for the lesion to be inserted into the input image. Currently just a
+        random position along the z-axis, but could be improved to use a prior probability map. The z index determines
+        the lower bound of the inserted lesion.
+        Args:
+            subject: a torchio.Subject instance containing the image (self.modality_name) and
+                     segmentation mask ('segmentation') to augment.
+            lesion_im: a torchio.LabelMap instance containing the binary lesion mask to use, cropped to the bounding
+                       box of the lesion along the z-axis.
+        Returns:
+            z: the z index where the lesion will be inserted into the input image in subject.
+        """
+        return random.randint(0, subject.spatial_shape[-1] - lesion_im.shape[-1])
 
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
+        """
+        Apply the LesionSCynth augmentation for a single subject by inserting several lesions into the input image.
+        Args:
+            subject: a torchio.Subject instance containing the image (self.modality_name) and
+                     segmentation mask ('segmentation') to augment.
+        Returns:
+            subject: a torchio.Subject instance with the augmented image and segmentation mask.
+        """
         lower_n_lesions, upper_n_lesions = 0, 8
         if self.fixed_synthetic_lesions:
             random.seed(int(subject['name']))
@@ -266,7 +320,7 @@ class LesionSCynth(tio.Transform):
                 continue
 
             # Choose a random z-location for the lesion
-            z = random.randint(0, subject.spatial_shape[-1] - lesion_im.shape[-1])
+            z = self.get_target_position(subject, lesion_im)
 
             if len(self.modalities) == 1:
                 lesion_im.data = self.dilate_erode_mask(lesion_im.data)
@@ -278,20 +332,23 @@ class LesionSCynth(tio.Transform):
                     continue
 
                 # Get Gaussian or constant intensity kernel
-                intensity_kernel, factor, sigma = self.get_kernel(lesion_im)
+                intensity_increase, factor, sigma = self.get_intensity_increase(lesion_im)
                 modality = self.modalities[0]
                 # Increase the intensity by the Gaussian within the lesion mask area
-                subject = self.update_intensity(subject, lesion_im, intensity_kernel, modality, z)
-
-                subject['segmentation'].data[..., z:z+lesion_im.shape[-1]][lesion_im.data == 1] = 1
+                subject = self.update_intensity(subject, lesion_im, intensity_increase, modality, z)
+                # Add the lesion to the segmentation mask
+                subject['segmentation'].data[..., z:z+lesion_im.shape[-1]] = deepcopy(lesion_im.data)
 
             else:
+                # Multimodality case
                 count = 0
                 # Insert the lesion in a random subset of modalities, augmenting the mask each time, and only
                 # add to the segmentation mask if the lesion has been inserted into at least two modalities
+                # Note that the transforms used here should be minimal, as they will be applied independently to the mask
+                # applied to each modality, and we need to ensure that the inserted lesion overlaps in both!
                 for modality in self.modalities:
                     if random.random() < self.multimodality_probability:
-                        lesion_copy = copy(lesion_im)
+                        lesion_copy = deepcopy(lesion_im)
                         lesion_copy.data = self.dilate_erode_mask(lesion_copy.data)
                         # Apply other transforms if provided (e.g. rotate, scale, etc.)
                         if self.other_transforms is not None:
@@ -312,8 +369,8 @@ class LesionSCynth(tio.Transform):
                         if lesion_copy.data.sum() == 0:
                             continue
 
-                        # Get Gaussian or constant intensity kernel
-                        intensity_kernel, factor, sigma = self.get_kernel(lesion_im)
+                        # Get Gaussian or constant intensity increase
+                        intensity_kernel, factor, sigma = self.get_intensity_increase(lesion_copy)
                         # Increase the intensity by the Gaussian (or constant) within the lesion mask area
                         subject = self.update_intensity(subject, lesion_copy, intensity_kernel, modality, z)
 
@@ -382,7 +439,7 @@ class CarveMix(tio.Transform):
         # Only insert lesions into acquisitions with no lesions (i.e. where label == 0)
         return subject['label'] == 0
 
-    def get_lesion_im(self) -> Tuple[tio.Image, tio.Image]:
+    def get_lesion_im(self) -> tio.Subject:
         # Select a random lesion volume to insert, and return the image and lesion mask
         return random.choice(self.lesion_subjects)
 
@@ -716,9 +773,9 @@ class LesionMixPopulate(tio.Transform):
         return subject[self.seg_name].data.sum().item()
 
     def normalise(self, subject: tio.Subject) -> Tuple[tio.Subject, float, float]:
-        mean, std = subject[self.im_name].data.float().mean(), subject[self.im_name].data.float().std()
-        subject[self.im_name].data = (subject[self.im_name].data - mean) / std
-        return subject, mean, std
+        mu, std = subject[self.im_name].data.float().mean(), subject[self.im_name].data.float().std()
+        subject[self.im_name].data = (subject[self.im_name].data - mu) / std
+        return subject, mu, std
 
     def denormalise(self, subject: tio.Subject, mean: float, std: float) -> tio.Subject:
         subject[self.im_name].data = subject[self.im_name].data.float() * std + mean
@@ -734,7 +791,7 @@ class LesionMixPopulate(tio.Transform):
             # If we are using a contrast factor, then we don't need this normalisation
             if self.factor_dist is None:
                 # Apply standardisation (mean=0,std=1) to align the two distributions better
-                subject, mean, std = self.normalise(subject)
+                subject, mu, std = self.normalise(subject)
             lesion = self.get_lesion()
             if lesion['lesion_im'].shape[-1] > subject.spatial_shape[-1]:
                 # If the lesion is larger than the subject volume, skip this iteration
@@ -754,7 +811,7 @@ class LesionMixPopulate(tio.Transform):
         if n_iter > 0:
             # Denormalise the subject to return to original intensity distribution
             if self.factor_dist is None:
-                subject = self.denormalise(subject, mean, std)
+                subject = self.denormalise(subject, mu, std)
 
         return subject
 
