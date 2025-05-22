@@ -1,5 +1,6 @@
 
 ### TODO
+- [ ] separate utils
 - [ ] LesionSCynth class
   - [x] Initial Code
   - [ ] Code tested

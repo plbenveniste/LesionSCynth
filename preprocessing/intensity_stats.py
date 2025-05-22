@@ -9,33 +9,8 @@ from datetime import datetime
 import logging
 import argparse
 
-from utils.im_utils import (new_image_from_ref, sitk_to_numpy, dilate_slicewise, erode_slicewise,
-                            check_matching_geom, resample_to_ref)
-
-
-def read_orient_extract(path: Path) -> tuple[np.ndarray, sitk.Image]:
-    """
-    Reads a saved image and converts it to LAS+ (RPI-) orientation.
-    Args:
-        path (Path): Path to the input image file.
-    Returns:
-        tuple[np.ndarray, sitk.Image]: A tuple containing the image as a numpy array and the reoriented SimpleITK image.
-    """
-    im_orig = sitk.ReadImage(path)
-    im_LAS = sitk.DICOMOrient(im_orig, 'LAS')
-    return sitk_to_numpy(im_LAS), im_LAS
-
-
-def read_extract(path: Path) -> tuple[np.ndarray, sitk.Image]:
-    """
-    Reads a saved image without changing its orientation.
-    Args:
-        path (Path): Path to the input image file.
-    Returns:
-        tuple[np.ndarray, sitk.Image]: A tuple containing the image as a numpy array and the original SimpleITK image.
-    """
-    im_orig = sitk.ReadImage(path)
-    return sitk_to_numpy(im_orig), im_orig
+from ..im_utils import (new_image_from_ref, sitk_to_numpy, dilate_slicewise, erode_slicewise,
+                        check_matching_geom, resample_to_ref, read_orient_extract)
 
 
 def check_and_write(im: sitk.Image, path: Path, overwrite: bool = False) -> None:
