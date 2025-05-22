@@ -1,6 +1,6 @@
 
 ### TODO
-- [ ] separate utils
+- [x] separate utils
 - [ ] LesionSCynth class
   - [x] Initial Code
   - [ ] Code tested
@@ -11,7 +11,7 @@
   - [x] Initial Code
   - [ ] Code tested
 - [ ] requirements.txt
-- [ ] Preprocessing
+- [x] Preprocessing
   - [ ] Initial Code
   - [ ] Code tested
 - [ ] Training

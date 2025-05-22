@@ -30,6 +30,42 @@ def read_extract(path: Path) -> tuple[np.ndarray, sitk.Image]:
     return sitk_to_numpy(im_orig), im_orig
 
 
+def get_bbox_bounds(im):
+    """ Returns the min and max indices of the bounding box of non-zero voxels in im. """
+    ax0 = np.any(im, axis=(1, 2))
+    ax1 = np.any(im, axis=(0, 2))
+    ax2 = np.any(im, axis=(0, 1))
+    ax0_min, ax0_max = np.where(ax0)[0][[0, -1]]
+    ax1_min, ax1_max = np.where(ax1)[0][[0, -1]]
+    ax2_min, ax2_max = np.where(ax2)[0][[0, -1]]
+    bounds = [(ax0_min, ax0_max), (ax1_min, ax1_max), (ax2_min, ax2_max)]
+    # Convert to int (rather than numpy.int64) to avoid errors when saving to json
+    bounds = [(int(min_), int(max_)) for min_, max_ in bounds]
+    return bounds
+
+
+def bbox(ref_im, other_im=None):
+    """ Crops ref_im (and other_im) to the bounding box of non-zero voxels of ref_im"""
+    (ax0_min, ax0_max), (ax1_min, ax1_max), (ax2_min, ax2_max) = get_bbox_bounds(ref_im)
+    if other_im is None:
+        return ref_im[ax0_min:ax0_max+1, ax1_min:ax1_max+1, ax2_min:ax2_max+1], None
+    elif isinstance(other_im, list):
+        return ref_im[ax0_min:ax0_max+1, ax1_min:ax1_max+1, ax2_min:ax2_max+1], [im[ax0_min:ax0_max+1, ax1_min:ax1_max+1, ax2_min:ax2_max+1] for im in other_im]
+    else:
+        return ref_im[ax0_min:ax0_max+1, ax1_min:ax1_max+1, ax2_min:ax2_max+1], other_im[ax0_min:ax0_max+1, ax1_min:ax1_max+1, ax2_min:ax2_max+1]
+
+
+def bbox_sitk(im: sitk.Image) -> tuple:
+    """ Returns the voxel coordinates of the bounding box of non-zero voxels in im.
+    Returns:  (x_min, x_max, y_min, y_max, z_min, z_max)"""
+    # Binarise the image. Do not use BinaryThreshold as it won't work for int images -
+    #   if the threshold is 1.0e-7 then the result will be all ones.
+    im_thr = sitk.Cast(im > 0, sitk.sitkUInt8)
+    bb = sitk.LabelStatisticsImageFilter()
+    bb.Execute(im_thr, im_thr)  # Execute the label statistics filter on the binarised image
+    return bb.GetBoundingBox(1)  # Return the bounding box voxel coordinates as tuple of 6 values
+
+
 def sitk_to_numpy(sitk_im: sitk.Image) -> np.ndarray:
     """ Convert SimpleITK image to numpy array. SimpleITK and numpy use different axis orders, so we swap them."""
     return np.swapaxes(sitk.GetArrayFromImage(sitk_im), 0, 2)
@@ -70,6 +106,16 @@ def resample_to_ref(im: sitk.Image, ref_im: sitk.Image, transform=sitk.AffineTra
     return sitk.Resample(im, size=ref_im.GetSize(), transform=transform, interpolator=interpolator,
                          outputOrigin=ref_im.GetOrigin(), outputSpacing=ref_im.GetSpacing(),
                          outputDirection=ref_im.GetDirection(), defaultPixelValue=0, outputPixelType=dtype)
+
+
+def resample_spacing(im, new_spacing, interpolator=sitk.sitkLinear):
+    """ Resamples image to new spacing. """
+    old_spacing = im.GetSpacing()
+    old_size = im.GetSize()
+    new_size = [int(round(size * old_space/new_space)) for size, old_space, new_space in zip(old_size, old_spacing, new_spacing)]
+    return sitk.Resample(im, size=new_size, transform=sitk.Transform(), interpolator=interpolator,
+                         outputOrigin=im.GetOrigin(), outputSpacing=new_spacing, outputDirection=im.GetDirection(),
+                         defaultPixelValue=0, outputPixelType=im.GetPixelID())
 
 
 def dilate_slicewise(mask_arr: np.ndarray, dilation_element: np.ndarray = morphology.disk(1),
