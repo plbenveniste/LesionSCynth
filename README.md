@@ -1,13 +1,25 @@
 
 ### TODO
-- [x] LesionSCynth class
-- [x] CarveMix and LesionMix classes
+- [ ] LesionSCynth class
+  - [x] Initial Code
+  - [ ] Code tested
+- [ ] CarveMix and LesionMix classes
+  - [x] Initial Code
+  - [ ] Code tested
 - [ ] Calculating intensity stats
+  - [x] Initial Code
+  - [ ] Code tested
+- [ ] requirements.txt
 - [ ] Preprocessing
+  - [ ] Initial Code
+  - [ ] Code tested
 - [ ] Training
   - [ ] Configs 
   - [ ] Data Module
   - [ ] Model (Lightning)
   - [ ] Architecture
   - [ ] training script, loss, etc.
+  - [ ] Code tested
 - [ ] Evaluation
+  - [ ] Initial Code
+  - [ ] Code tested
