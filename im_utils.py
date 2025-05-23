@@ -2,6 +2,8 @@ from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
 from skimage import morphology, filters
+import torchio as tio
+from torchio.transforms import Pad
 from typing import Union, Optional
 
 
@@ -178,3 +180,18 @@ def check_matching_geom(im1: sitk.Image, im2: sitk.Image, tol=1e-5):
         return True
     else:
         return False
+
+
+class PadToTargetShape(tio.CropOrPad):
+    """Pad, if necessary, to match a target shape."""
+    def __init__(self, target_shape, **kwargs):
+        super().__init__(target_shape=target_shape, **kwargs)
+
+    def apply_transform(self, subject: tio.Subject) -> tio.Subject:
+        subject.check_consistent_space()
+        padding_params, _ = self.compute_crop_or_pad(subject)
+        padding_kwargs = {'padding_mode': self.padding_mode}
+        if padding_params is not None:
+            pad = Pad(padding_params, **padding_kwargs)
+            subject = pad(subject)  # type: ignore[assignment]
+        return subject

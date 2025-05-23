@@ -11,16 +11,18 @@
   - [x] Initial Code
   - [ ] Code tested
 - [ ] requirements.txt
-- [x] Preprocessing
-  - [ ] Initial Code
+  - [ ] Also stripped back requirements for just using the augmentation classes
+- [ ] Preprocessing
+  - [x] Initial Code
   - [ ] Code tested
 - [ ] Training
-  - [ ] Configs 
-  - [ ] Data Module
-  - [ ] Model (Lightning)
-  - [ ] Architecture
-  - [ ] training script, loss, etc.
+  - [x] Configs 
+  - [x] Data Module
+  - [x] Model (Lightning)
+  - [x] Architecture
+  - [x] training script, loss, etc.
   - [ ] Code tested
 - [ ] Evaluation
   - [ ] Initial Code
   - [ ] Code tested
+- [ ] README with instructions
