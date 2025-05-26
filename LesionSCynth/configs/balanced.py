@@ -1,6 +1,6 @@
-from sslearn.model_and_training.data_module import SyntheticMixedDataModule
-from sslearn.model_and_training.model import Model
-from sslearn.configs.config import Config
+from ..model_and_training.data_module import SyntheticMixedDataModule
+from ..model_and_training.model import Model
+from ..configs.config import Config
 
 
 class BalancedConfig(Config):

@@ -1,6 +1,6 @@
 from torch.optim import AdamW
 from torch.nn import GroupNorm
-from sslearn.configs.mixed_synthetic import SyntheticMixedConfig
+from ..configs.mixed_synthetic import SyntheticMixedConfig
 
 
 class SyntheticMixedAdamConfig(SyntheticMixedConfig):

@@ -1,10 +1,10 @@
 from pathlib import Path
 import pandas as pd
 from scipy.stats import truncnorm
-from sslearn.model_and_training.data_module import SyntheticMixedDataModule
-from sslearn.model_and_training.model import Model
-from sslearn.model_and_training.data_augmentation import OptionalLesionMixPopulate
-from sslearn.configs.config import Config
+from ..model_and_training.data_module import SyntheticMixedDataModule
+from ..model_and_training.model import Model
+from ..model_and_training.data_augmentation import OptionalLesionMixPopulate
+from ..configs.config import Config
 
 
 class SyntheticMixedConfig(Config):
