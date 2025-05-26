@@ -1,63 +1,15 @@
 from pathlib import Path
-from torch.utils.data import DataLoader
 import torch
 import torchio as tio
+from torchio import SubjectsLoader, Subject
 import lightning as L
 import numpy as np
 import warnings
 from tqdm import tqdm
 from typing import Optional, Iterator, List, Dict, Any, Union
 
-from torchio import Subject
-from packaging import version
-
 from .data_augmentation import CarveMix
 from ..configs.config import Config
-
-# Catch bug with TorchIO + Lightning for PyTorch >= 2.3 - see https://github.com/fepegar/torchio/issues/1179
-if version.parse(torch.__version__) >= version.parse('2.3.0'):
-    def stack_(x):
-        if isinstance(x[0], torch.Tensor):
-            return torch.stack(x, dim=0)
-        elif isinstance(x[0], np.ndarray):
-            return np.stack(x, axis=0)  # Maintain the original type, e.g. AFFINE is np.ndarray
-        elif isinstance(x[0], tio.Image):
-            # tio.Image is instance of dict containing attributes 'data', 'affine' etc. - stack these individually
-            return {
-                k: stack_([batch_im[k] for batch_im in x])
-                for k in x[0].keys()
-            }
-        elif isinstance(x[0], (int, float)):
-            # Convert numerical list to tensor
-            return torch.Tensor(x)
-        else:
-            # Maintain a list of strings, for example
-            return x
-
-
-    class SubjectDataLoader(torch.utils.data.DataLoader):
-
-        def __init__(
-                self,
-                dataset: tio.data.SubjectsDataset,
-                **kwargs
-        ):
-            super().__init__(
-                dataset=dataset,
-                collate_fn=self._collate,
-                **kwargs
-            )
-
-        @staticmethod
-        def _collate(batch_inputs: list[tio.Subject]) -> dict[str, Any]:
-            batch_dict = {
-                top_level_key: stack_([subject[top_level_key] for subject in batch_inputs])
-                for top_level_key in batch_inputs[0].keys()
-            }
-
-            return batch_dict
-else:
-    SubjectDataLoader = torch.utils.data.DataLoader
 
 
 def get_ext(subj_dir, filename):
@@ -243,7 +195,7 @@ class DataModule(L.LightningDataModule):
             shuffle_subjects=True,
             shuffle_patches=True,
         )
-        return SubjectDataLoader(patches_training_set, batch_size=self.config.training_batch_size, num_workers=0,
+        return SubjectsLoader(patches_training_set, batch_size=self.config.training_batch_size, num_workers=0,
                                  pin_memory=self.config.pin_memory)
 
     def train_dataloader_balanced(self):
@@ -265,7 +217,7 @@ class DataModule(L.LightningDataModule):
             shuffle_subjects=False,
             shuffle_patches=True,
         )
-        return SubjectDataLoader(patches_training_set, batch_size=self.config.training_batch_size, num_workers=0,
+        return SubjectsLoader(patches_training_set, batch_size=self.config.training_batch_size, num_workers=0,
                                  pin_memory=self.config.pin_memory)
 
     def val_dataloader(self):
@@ -278,7 +230,7 @@ class DataModule(L.LightningDataModule):
             shuffle_subjects=False,
             shuffle_patches=False,
         )
-        return SubjectDataLoader(patches_validation_set, batch_size=self.config.validation_batch_size)
+        return SubjectsLoader(patches_validation_set, batch_size=self.config.validation_batch_size)
 
     def load_subject(self, subj_dir: Path) -> Union[tio.Subject, None]:
         filepaths = {seq: get_ext(subj_dir, seq) for seq in self.config.modalities}
