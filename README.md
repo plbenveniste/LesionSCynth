@@ -11,11 +11,11 @@
 - [x] Calculating intensity stats
   - [x] Initial Code
   - [x] Code tested
-- [ ] requirements.txt
-  - [ ] Also stripped back requirements for just using the augmentation classes
-- [ ] Preprocessing
+- [x] requirements.txt
+  - [x] Also stripped back requirements for just using the augmentation classes
+- [x] Preprocessing
   - [x] Initial Code
-  - [ ] Code tested
+  - [x] Code tested
 - [ ] Training
   - [x] Configs 
   - [x] Data Module
