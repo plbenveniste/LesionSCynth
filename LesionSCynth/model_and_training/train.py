@@ -35,7 +35,11 @@ def run(args, config_path):
         args.gpu_ids = 'auto'
 
     data = config.data_module(Path(config.data_dir), config)
-    logger = L.pytorch.loggers.TensorBoardLogger(out_dir, name='lightning_logs')
+    # Check if TensorBoard installed
+    try:
+        logger = L.pytorch.loggers.TensorBoardLogger(out_dir, name='lightning_logs')
+    except ModuleNotFoundError:
+        logger = L.pytorch.loggers.CSVLogger(out_dir, name='lightning_logs')
 
     trainer = L.Trainer(
         default_root_dir=out_dir, max_epochs=config.max_epochs, max_steps=config.max_steps, logger=logger,
