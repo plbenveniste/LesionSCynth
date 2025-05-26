@@ -1,15 +1,16 @@
 
 ### TODO
 - [x] separate utils
-- [ ] LesionSCynth class
+- [x] LesionSCynth class
   - [x] Initial Code
-  - [ ] Code tested
+  - [x] Code tested
+  - [x] Generate & save examples
 - [ ] CarveMix and LesionMix classes
   - [x] Initial Code
   - [ ] Code tested
-- [ ] Calculating intensity stats
+- [x] Calculating intensity stats
   - [x] Initial Code
-  - [ ] Code tested
+  - [x] Code tested
 - [ ] requirements.txt
   - [ ] Also stripped back requirements for just using the augmentation classes
 - [ ] Preprocessing

@@ -319,7 +319,7 @@ if __name__ == "__main__":
                              "folders that contain the spinal cord seg images.")
     parser.add_argument('--anat_name', '-an', type=str, default='t2.nii.gz', help="Name of the anat image file.")
     parser.add_argument('--seg_name', '-sn', type=str, default='seg.nii.gz', help="Name of the lesion seg image file.")
-    parser.add_argument('--sc_seg_name', '-ssn', type=str, default='sc_seg.nii.gz',
+    parser.add_argument('--sc_seg_name', '-ssn', type=str, default='t2_sc_seg.nii.gz',
                         help="Name of the spinal cord seg image file.")
     parser.add_argument('--resample', '-r', action='store_true',
                         help="Resample the seg images to the anat image space, if they are in different spaces.")
@@ -342,9 +342,6 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Invalid --seg_dir. Directory {args.seg_dir} does not exist.")
     if args.sc_seg_dir and not args.sc_seg_dir.exists():
         raise FileNotFoundError(f"Invalid --sc_seg_dir. Directory {args.sc_seg_dir} does not exist.")
-
-    if args.other_seg_dir and not args.other_seg_dir.exists():
-        raise FileNotFoundError(f"Invalid --other_seg_dir. Directory {args.other_seg_dir} does not exist.")
 
     if args.seg_dir is None:
         args.seg_dir = args.anat_dir
