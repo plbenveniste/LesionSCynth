@@ -586,7 +586,7 @@ def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict)
     t2_sc_seg_arr = sitk_to_numpy(t2_sc_seg_im)
 
     # 9. Resample lesion seg if it exists. --------------------------------------------------------------
-    if process_stir:
+    if seg_path.exists():
         seg_im = sitk.ReadImage(seg_path)
         seg_im = resample_to_ref(seg_im, t2_resampled, interpolator=sitk.sitkNearestNeighbor)
         seg_arr = sitk_to_numpy(seg_im)
