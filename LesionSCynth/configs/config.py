@@ -14,32 +14,6 @@ from ..model_and_training.loss import DeepSupervisionLoss, CrossEntropyDiceLoss
 from ..im_utils import PadToTargetShape
 
 
-def get_git_hash(parent_level=0):
-    """ Get the hash of the current git commit.
-    Args:
-        parent_level: int. The number of parent directories to go up to find the directory containing .git directory.
-    Returns:
-        str: The hash of the current git commit.
-    """
-    # Get the path to where the function is called (not the path to the utils package script).
-    path_to_calling_file = Path(traceback.extract_stack()[-2].filename)
-    parent_dir = path_to_calling_file.parents[parent_level]
-    git_dir = parent_dir / '.git'
-    if not git_dir.exists():
-        parent0 = path_to_calling_file.parents[0]
-        parent1 = path_to_calling_file.parents[1]
-        msg = f'Could not find .git directory in {parent_dir}. Try changing the parent_level parameter. ' \
-              f'E.g. parent_level=0 for {parent0}, parent_level=1 for {parent1}, etc.'
-        # raise FileNotFoundError(msg)
-        warnings.warn(msg)
-
-    with (git_dir / 'HEAD').open('r') as head:
-        ref = head.readline().split(' ')[-1].strip()
-
-    with (git_dir / ref).open('r') as git_hash:
-        return git_hash.readline().strip()
-
-
 def save_config(file, path):
     file = Path(file)
     path = Path(path)
@@ -48,8 +22,6 @@ def save_config(file, path):
     base_config_path = file.parent / 'config.py'
     if base_config_path.exists():
         shutil.copyfile(base_config_path, path / 'config.py')
-    with open(path / 'git_hash.txt', 'w') as f:
-        f.write(get_git_hash())
 
 
 class Config:
@@ -63,27 +35,28 @@ class Config:
     # region Data --------------------------------------------------------------------------
     modalities = ['t2']
 
-    data_dir = None  # The root directory for the training data
-    contrast_summary_path = None  # Path to the CSV file containing the contrast summary stats
+    # *** The below paths need to be set for your data and dir structure ***
+    data_dir = Path('data/preprocessed/train')  # The root directory for the training data
+    contrast_summary_path = Path('data/intensity_stats/contrast_summary.csv')  # Path to the CSV file containing the contrast summary stats
+    lesion_dir = Path('data/preprocessed/lesions')
     save_examples_dir = None  # Directory to save training examples after augmentation
-    lesion_dir = None  # Directory containing the lesion masks (& maybe intensity images). subdir defined in training_dirs_lesions
-
-    training_dirs = ['train']  # or e.g., ['fold_1', 'fold_2', 'fold_3']
-    training_dirs_lesions = training_dirs.copy()  # the directory names within lesion_dir to be used for training
+    train_dirs = ['training_example']
+    val_dirs = ['training_example']
+    train_dirs_lesions = ['all']
 
     # Run checks on the paths and directories
-    for p in [data_dir, contrast_summary_path, save_examples_dir, lesion_dir]:
+    for p in [data_dir, contrast_summary_path, lesion_dir]:
         if p is None or not isinstance(p, Path) or not p.exists():
-            raise ValueError(f'Invalid path: {p} for {p.__name__}. Please set paths as pathlib.Path objects in'
+            raise ValueError(f'Invalid path: {p}. Please set paths as pathlib.Path objects in'
                              f'the config.py file.')
-    for d in training_dirs:
+    for d in train_dirs:
         if not (data_dir / d).exists():
             raise FileNotFoundError(f'Training directory {d} does not exist in {data_dir}. '
-                                    f'Please set the correct training_dirs in the config.py file.')
-    for d in training_dirs_lesions:
+                                    f'Please set the correct train_dirs in the config.py file.')
+    for d in train_dirs_lesions:
         if not (lesion_dir / d).exists():
             raise FileNotFoundError(f'Training directory {d} does not exist in {lesion_dir}. '
-                                    f'Please set the correct training_dirs_lesions in the config.py file.')
+                                    f'Please set the correct train_dirs_lesions in the config.py file.')
     # endregion
     # region Training -----------------------------------------------------------------------
     max_epochs = 2000
@@ -165,10 +138,6 @@ class Config:
     # endregion
     # region Params to be defined later -------------------------------------------------------
     scheduler_args, optimizer_args = None, None  # These are set in update_optimizer_scheduler()
-    # These other params are set in update_params()
-    train_dirs, val_dirs, test_dirs = None, None, None
-    train_dirs_lesions = None
-
     training_transform, validation_transform = None, None
     transform_kwargs = {}
     check_val_every_n_epoch = None

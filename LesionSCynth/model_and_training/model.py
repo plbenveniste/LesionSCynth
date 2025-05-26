@@ -40,7 +40,7 @@ class Model(L.LightningModule):
         self.loss_func = config.loss(**loss_params)
         # Alternative to torch.nn.modules.utils._triple:
         example_array = torch.Tensor(2, 1, *config.patch_size)
-        self.example_input_array = {seq: example_array for seq in self.config.modalities}
+        self.example_input_array = [{seq: example_array for seq in self.config.modalities}]
 
     def get_scale_factors(self):
         """ Get the scale factors for each depth in deep supervision based on the kernel sizes of the pooling
@@ -79,7 +79,7 @@ class Model(L.LightningModule):
     def step(self, batch: dict):
         inputs, targets = self.prepare_batch(batch)
         logits = self.forward(inputs)
-        loss = self.loss_func(logits, targets['segmentation'])
+        loss = self.loss_func(logits, targets)
 
         # Save examples to file
         if getattr(self.config, 'save_examples_dir', None) is not None and not self.trainer.sanity_checking:
@@ -104,9 +104,9 @@ class Model(L.LightningModule):
                                         affine=batch[modality][tio.AFFINE][i].detach().cpu()
                                         ).save(fpath)
                     if self.config.deep_supervision_levels > 1:
-                        target = targets['segmentation'][-1][i][1:, ...].detach().cpu()
+                        target = targets[-1][i][1:, ...].detach().cpu()
                     else:
-                        target = targets['segmentation'][i][1:, ...].detach().cpu()
+                        target = targets[i][1:, ...].detach().cpu()
                     tio.ScalarImage(tensor=target, affine=batch[modality][tio.AFFINE][i].detach().cpu()
                                     ).save(str(fpath).replace('input', 'target'))
 

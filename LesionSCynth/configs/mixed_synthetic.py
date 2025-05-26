@@ -1,10 +1,11 @@
 import torchio as tio
 import pandas as pd
+import numpy as np
 from scipy.stats import truncnorm
 
 from ..model_and_training.data_module import SyntheticMixedDataModule
 from ..model_and_training.model import Model
-from ..model_and_training.data_augmentation import OptionalAddLesionContrast
+from ..model_and_training.data_augmentation import OptionalLesionSCynth
 from ..configs.config import Config
 
 
@@ -22,15 +23,15 @@ class SyntheticMixedConfig(Config):
 
     def get_truncnorm_params(self):
         # Parameters for truncnorm distribution
-        contrast_summary = pd.read_csv(self.contrast_summary_path, dtype={'first_fold': str, 'subset': str})
-        contrast_summary = contrast_summary[(contrast_summary['first_fold'] == str(self.first_fold)) &
-                                            (contrast_summary['subset'] == self.exp_scale)]
+        contrast_summary = pd.read_csv(self.contrast_summary_path)
 
         a = contrast_summary[contrast_summary['statistic'] == 'pct_20']['surround_5_contrast'].values[0]
         loc = contrast_summary[contrast_summary['statistic'] == 'mean']['surround_5_contrast'].values[0]
         scale = contrast_summary[contrast_summary['statistic'] == 'std']['surround_5_contrast'].values[0]
         b = 1.0  # Effectively truncated only at left side
         print(f"Truncnorm parameters: a={a}, loc={loc}, scale={scale}, b={b}")
+        if scale is None or scale == 0 or np.isnan(scale):
+            scale = 1e-3
         a_transformed, b_transformed = (a - loc) / scale, (b - loc) / scale
         return a_transformed, b_transformed, loc, scale
 
@@ -47,7 +48,7 @@ class SyntheticMixedConfig(Config):
             'blur_sigma': 0.67,
             'other_transforms': tio.RandomAffine(scales=0.1, degrees=(5, 5, 45), center='image', p=0.5),
         }
-        lesion_augmentation = OptionalAddLesionContrast(**aug_args)
+        lesion_augmentation = OptionalLesionSCynth(**aug_args)
         return lesion_augmentation, aug_args
 
     def update_params(self, mode='train', **kwargs):
