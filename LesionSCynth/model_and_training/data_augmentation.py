@@ -65,6 +65,14 @@ def gaussian_func(x: Union[np.ndarray, torch.Tensor], sigma: Union[float, np.nda
     return z
 
 
+def find_seg_files(lesion_dir) -> List:
+    return [
+        Path(root) / file
+        for root, _, files in os.walk(lesion_dir, followlinks=True)
+        for file in files
+        if file.endswith('.nii.gz') and 'seg' in file
+    ]
+
 class LesionSCynth(tio.Transform):
     r"""Randomly add predefined lesion shapes by increasing contrast.
     Args:
@@ -119,13 +127,7 @@ class LesionSCynth(tio.Transform):
         if lesion_dir is not None:
             # rglob doesn't work if subdirs are symlinks
             # self.lesion_paths = [f for f in lesion_dir.rglob('*.nii.gz') if 'seg' in f.name]
-            self.lesion_paths = [
-                Path(root) / file
-                for root, _, files in os.walk(lesion_dir, followlinks=True)
-                for file in files
-                if file.endswith('.nii.gz') and 'seg' in file
-            ]
-
+            self.lesion_paths = find_seg_files(lesion_dir)
         else:
             self.lesion_paths = lesion_paths
 
@@ -622,7 +624,7 @@ class LesionMixPopulate(tio.Transform):
 
     def init_lesion_paths(self) -> List[Tuple[Path, Path]]:
         """ Get a list of all possible lesions and their masks. """
-        mask_paths = [f for f in self.lesion_dir.rglob('*.nii.gz') if 'seg' in f.name]
+        mask_paths = find_seg_files(self.lesion_dir)
 
         all_paths = [(p, Path(str(p).replace('_seg.nii.gz', '.nii.gz'))) for p in mask_paths]
 
@@ -855,19 +857,9 @@ if __name__ == '__main__':
     parser.add_argument('--out_dir', type=Path, default=None,
                         help='Path to directory into which the augmented image and segmentation mask will be saved.'
                              'If None, then nothing will be saved, and the augmented image will be plotted.')
+    parser.add_argument('--method', type=str, choices=['LSC', 'LM', 'lesionscynth', 'lesionmix'],
+                        default='lesionscynth', help='Method to use for data augmentation.')
     args = parser.parse_args()
-
-    a, b = 0.05, 1.0  # Effectively truncated only at left side
-    loc = 0.17
-    scale = 0.11
-    a_transformed = (a - loc) / scale
-    b_transformed = (b - loc) / scale
-    factor_dist = scipy.stats.truncnorm(a=a_transformed, b=b_transformed, loc=loc, scale=scale)
-
-    synth = LesionSCynth(lesion_dir=args.lesion_dir, modalities=['image'], blur_radius=2, blur_sigma=0.67,
-                         gaussian_spatial=True, min_factor_gaussian=0.015, factor_distribution=factor_dist,
-                         other_transforms=tio.RandomAffine(scales=0.1, degrees=(5, 5, 45), center='image', p=0.5)
-                         )
 
     # Load an example subject
     example_im = tio.ScalarImage(args.example_im_path)
@@ -882,6 +874,24 @@ if __name__ == '__main__':
         sc_seg=example_sc_seg,
         name=str(args.example_im_path).replace('.nii.gz', '')
     )
+    a, b = 0.05, 1.0  # Effectively truncated only at left side
+    loc = 0.17
+    scale = 0.11
+    a_transformed = (a - loc) / scale
+    b_transformed = (b - loc) / scale
+    factor_dist = scipy.stats.truncnorm(a=a_transformed, b=b_transformed, loc=loc, scale=scale)
+
+    if args.method in ['lesionscynth', 'LSC']:
+        synth = LesionSCynth(lesion_dir=args.lesion_dir, modalities=['image'], blur_radius=2, blur_sigma=0.67,
+                             gaussian_spatial=True, min_factor_gaussian=0.015, factor_distribution=factor_dist,
+                             other_transforms=tio.RandomAffine(scales=0.1, degrees=(5, 5, 45), center='image', p=0.5)
+                             )
+    elif args.method in ['lesionmix', 'LM']:
+        synth = LesionMixPopulate(lesion_dir=args.lesion_dir, load_distribution_type='uniform',)
+                                  # Combine LesionMix with the contrast vs. neighbourhood method of LesionSCynth
+                                  # factor_distribution=factor_dist)
+    else:
+        raise ValueError(f'Unknown method {args.method}.')
 
     # Apply the augmentation
     augmented_subject = synth(subject)
@@ -899,10 +909,10 @@ if __name__ == '__main__':
         plt.subplots_adjust(wspace=0, hspace=0)  # remove space between subplots
         fig.subplots_adjust(0, 0.02, 1, 0.9)  # remove margins
         mid_slice_ix = augmented_subject['segmentation'].data.shape[1] // 2
-        axes[0].imshow(augmented_subject['image'].data[0, mid_slice_ix].T,
+        axes[0].imshow(augmented_subject['image'].data.numpy()[0, mid_slice_ix, :, ::-1].T,
                        cmap='gray')
         axes[0].set_title('Augmented Image')
-        axes[1].imshow(augmented_subject['segmentation'].data[0, mid_slice_ix].T,
+        axes[1].imshow(augmented_subject['segmentation'].data.numpy()[0, mid_slice_ix, :, ::-1].T,
                        cmap='gray')
         axes[1].set_title('Augmented Seg Mask')
         axes[0].axis('off')
