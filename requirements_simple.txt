@@ -1,0 +1,7 @@
+# requirements for data_augmentation module, without training etc.
+numpy
+matplotlib<3.10
+scipy
+scikit-image
+torch
+torchio

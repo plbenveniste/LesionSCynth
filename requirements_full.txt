@@ -1,0 +1,12 @@
+# requirements for full project, including augmentation, training, testing, etc.
+
+lightning
+matplotlib<3.10
+numpy
+scipy
+scikit-image
+SimpleITK
+pandas
+torch
+torchio
+tqdm
