@@ -82,3 +82,8 @@ python -m LesionSCynth.model_and_training.train \
 
 #### 4. Evaluation 
 The process and code from MS-Multi-Spine-Challenge were used for evaluation. See https://gitlab.inria.fr/msmultispinechallenge/msmultispineevaluation
+
+
+##### Data Source
+The two image examples used for example purposes in this repo are from:\
+Cohen-Adad, J., Alonso-Ortiz, E., Abramovic, M., et al. (2021). Open-access quantitative MRI data of the spinal cord and reproducibility across participants, sites and manufacturers. Scientific Data, 8(1). https://doi.org/10.1038/s41597-021-00941-8
