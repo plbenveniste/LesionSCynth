@@ -285,7 +285,7 @@ def save_contrast_summary(df, metadata_path, out_path):
 
 def main(args):
     args.out_dir.mkdir(exist_ok=True, parents=True)
-    out_file_prefix = f'{args.out_file}_' if args.out_file else ''
+    out_file_prefix = f'{args.out_file}_' if args.out_file is not None else ''
     timestamp = setup_logging(args.out_dir)
 
     total = len(list(args.anat_dir.iterdir())) if not args.subset else len(args.subset)
@@ -298,9 +298,13 @@ def main(args):
             data.extend(process_subject(args, subj, out_file_prefix))
             pbar.update(1)
 
+    if not data:
+        raise ValueError("No data collected. Check the input directories and segmentation files. "
+                         "Check the log file for processing errors.")
+
     df = pd.DataFrame(data)
     df = compute_additional_metrics(df)
-    df.to_csv(args.out_dir / f'{args.out_file}_lesion_intensity_stats_{timestamp}.csv', index=False)
+    df.to_csv(args.out_dir / f'{out_file_prefix}lesion_intensity_stats_{timestamp}.csv', index=False)
 
     if args.metadata_path:
         save_contrast_summary(df, metadata_path=args.metadata_path, out_path=args.out_dir / 'contrast_summary.csv')
