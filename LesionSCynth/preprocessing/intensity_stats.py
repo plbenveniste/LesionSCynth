@@ -244,43 +244,27 @@ def compute_additional_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def save_contrast_summary(df, metadata_path, out_path):
+def save_contrast_summary(df, out_path):
     """
     Summarise the lesion contrast stats for the different training sets.
     Args:
         df (pd.DataFrame): DataFrame containing the lesion contrast stats for each subject. Should contain the columns:
                            'subject', 'surround_3_contrast', 'surround_5_contrast', 'surround_7_contrast'.
-        metadata_path (str): Path to the metadata file. Should contain the columns:
-                            'id' (matching 'subject' in df), 'fold', 'incl_exp_17', 'incl_exp_36', 'incl_exp_72',
-                            'incl_exp_145' -> these are binary flags for whether an image is included at that scale.
         out_path (str): Path to save the contrast summary file.
     """
-    metadata_df = pd.read_csv(metadata_path, usecols=['id', 'fold', 'incl_exp_17', 'incl_exp_36',
-                                                      'incl_exp_72', 'incl_exp_145'],
-                              dtype={'id': int, 'fold': str})
-    merged = pd.merge(df, metadata_df, left_on='subject', right_on='id', how='inner')
-
     def percentile(n):
         def pct(x): return x.quantile(n)
 
         pct.__name__ = f'pct_{int(n * 100):02d}'
         return pct
 
-    df_list = []
-    for size in ['all', '17', '36', '72', '145']:
-        for fold in range(1, 6):
-            tmp = merged if size == 'all' else merged[merged[f'incl_exp_{size}'] == 1]
-            tmp = tmp[tmp['fold'].isin([str(fold), str(fold % 5 + 1), str((fold + 1) % 5 + 1)])]
-            cols = ['surround_3_contrast', 'surround_5_contrast', 'surround_7_contrast']
-            summary = tmp[cols].agg(['mean', 'std', 'min', 'max', 'median',
-                                     percentile(0.05), percentile(0.1), percentile(0.2),
-                                     percentile(0.25), percentile(0.75), percentile(0.95)])
-            summary['subset'] = size
-            summary['first_fold'] = fold
-            df_list.append(summary)
+    cols = ['surround_3_contrast', 'surround_5_contrast', 'surround_7_contrast']
+    summary = df[cols].agg(['mean', 'std', 'min', 'max', 'median',
+                             percentile(0.05), percentile(0.1), percentile(0.2),
+                             percentile(0.25), percentile(0.75), percentile(0.95)])
 
-    contrast_summary = pd.concat(df_list).reset_index(names=['statistic'])
-    contrast_summary.to_csv(out_path, index=False)
+    summary = summary.reset_index(names=['statistic'])
+    summary.to_csv(out_path, index=False)
 
 
 def main(args):
@@ -306,8 +290,7 @@ def main(args):
     df = compute_additional_metrics(df)
     df.to_csv(args.out_dir / f'{out_file_prefix}lesion_intensity_stats_{timestamp}.csv', index=False)
 
-    if args.metadata_path:
-        save_contrast_summary(df, metadata_path=args.metadata_path, out_path=args.out_dir / 'contrast_summary.csv')
+    save_contrast_summary(df, out_path=args.out_dir / 'contrast_summary.csv')
 
 
 if __name__ == "__main__":
@@ -332,9 +315,6 @@ if __name__ == "__main__":
     parser.add_argument('--subset', '-s', type=str, nargs='+', default=None, help="Subset of subjects to process.")
     parser.add_argument('--save_cc', '-cc', action='store_true', help="Save connected components of the lesion seg.")
     parser.add_argument('--save_dilations', '-ss', action='store_true', help="Save dilated regions of the lesions.")
-    parser.add_argument('--metadata_path', '-mp', type=str, default=None,
-                        help="Path to the metadata file for the training sets. Used to summarise the lesion contrast "
-                             "stats.")
     parser.add_argument('--overwrite', '-ow', action='store_true', help="Overwrite existing files.")
 
     args = parser.parse_args()
