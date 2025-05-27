@@ -9,7 +9,7 @@ Plot example of synthetic lesions using the sample data:
 ```bash
 conda create -n lesion_synth python=3.11
 conda activate lesion_synth
-pip install -r requirements_simple.txt
+pip install -r requirements_lite.txt
 python -m LesionSCynth.model_and_training.data_augmentation \
   --lesion_dir data/preprocessed/lesions \
   --example_im_path data/preprocessed/images/sub-32vuiisIngenia06/t2.nii.gz \
@@ -17,7 +17,7 @@ python -m LesionSCynth.model_and_training.data_augmentation \
 ```
 
 ### Training
-If wanting to run the full training pipeline, you can install the full requirements `requirements_full.txt`. There is a further dependency on spinal cord toolbox (SCT) for obtaining segmentation masks of the spinal cord during preprocessing.
+If wanting to run the full training pipeline, you can install the full requirements `requirements.txt`. There is a further dependency on spinal cord toolbox (SCT) for obtaining segmentation masks of the spinal cord during preprocessing.
 
 The preprocessing (& training) assume a particular directory structure and file naming. The directory structure 
 for training & evaluation will be created by the preprocessing script.
