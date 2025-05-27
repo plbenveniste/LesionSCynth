@@ -81,7 +81,27 @@ python -m LesionSCynth.model_and_training.train \
 ```
 
 #### 4. Evaluation 
+
+##### Launch inference
+```bash
+python -m LesionSCynth.testing.inference \
+--input_dir data/preprocessed/images \
+--orig_dir data/rawdata \
+--preds_dir data/preds \
+--model_dir data/models \
+--path_to_bounds data/preprocessed/images/bounds_20250526154026.json \
+--modalities t2
+```
+
+##### Launch evaluation
 The process and code from MS-Multi-Spine-Challenge were used for evaluation. See https://gitlab.inria.fr/msmultispinechallenge/msmultispineevaluation
+
+```bash
+python -m LesionSCynth.testing.run_froc \
+--eval_dir data/eval/best_loss \
+--preds_dir data/preds/best_loss \
+--froc_script_path /path/to/main.py  # Path to the script from MS-Multi-Spine-Challenge evaluation 
+```
 
 
 ##### Data Source
