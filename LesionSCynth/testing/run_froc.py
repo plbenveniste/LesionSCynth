@@ -29,6 +29,32 @@ def get_dice(gt, pred):
     return 1 - dice(gt.flatten(), pred.flatten())
 
 
+def pred_to_eval_dir(preds_dir: Path, eval_dir: Path) -> None:
+    """ Create symlinks between the predictions to an eval dir. The preds dir has one subdirectory per subject/volume,
+    whereas the eval dir has two subdirs, gt and pred, which contain symlinks to the GT and prediction images with names
+    given by the subject/volume ID.
+    Args:
+        preds_dir (Path): Path to the directory containing the predictions.
+        eval_dir (Path): Path to the evaluation directory where the symlinks will be created.
+    """
+    gt_dir = eval_dir / 'gt'
+    pred_dir = eval_dir / 'pred'
+    gt_dir.mkdir(exist_ok=True, parents=True)
+    pred_dir.mkdir(exist_ok=True)
+
+    for subj in preds_dir.iterdir():
+        if not subj.is_dir():
+            continue
+        subj_id = subj.name
+        new_gt_path = gt_dir / f'{subj_id}.nii.gz'
+        new_pred_path = pred_dir / f'{subj_id}.nii.gz'
+
+        if not new_gt_path.exists():
+            new_gt_path.symlink_to((subj / 'seg.nii.gz').resolve())
+        if not new_pred_path.exists():
+            new_pred_path.symlink_to((subj / f'{subj_id}_pmap_orig_space.nii.gz').resolve())
+
+
 def generate_ccs(input_dir, output_dir, thresh, agg='max', save_scores=False, gt_dir=None):
     """
     Binarise and generate connected components from pmap inputs.
@@ -186,6 +212,10 @@ def add_overlap_metrics(results, gt_df, pred_df, cc_thresh):
 
 
 def main(args):
+    # Create the eval dir structure and symlinks if they do not exist
+    if args.preds_dir is not None:
+        pred_to_eval_dir(args.preds_dir, args.eval_dir)
+
     results_dir = args.eval_dir / args.results_subdir
     # Generate GT connected components
     generate_ccs(args.eval_dir / 'gt', args.eval_dir / 'gt_ccs', 0.5, 'max', save_scores=False)
@@ -231,6 +261,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--eval_dir', '-e', type=Path, required=True,
                         help='Path to the evaluation directory containing "gt" and "pred" subdirectories.')
+    parser.add_argument('--preds_dir', '-p', type=Path, default=None,
+                        help='Path to dir with predictions. If provided, then gt and pred directories will be created '
+                             'in eval_dir with symlinks to the predictions.')
     parser.add_argument('--results_subdir', '-r', type=str, default='results_froc',
                         help='Subdirectory to store FROC results in the evaluation directory.')
     parser.add_argument('--froc_script_path', '-s', type=Path, required=True,
@@ -245,9 +278,15 @@ if __name__ == '__main__':
                         help='If set, overwrite existing FROC results if they exist.')
     args = parser.parse_args()
 
-    if not (args.eval_dir / 'gt').exists():
-        raise FileNotFoundError(f"Could not find 'gt' directory in {args.eval_dir}")
-    if not (args.eval_dir / 'pred').exists():
-        raise FileNotFoundError(f"Could not find 'pred' directory in {args.eval_dir}")
+    if args.preds_dir is None:
+        if not (args.eval_dir / 'gt').exists():
+            raise FileNotFoundError(f"Could not find 'gt' directory in {args.eval_dir}")
+        if not (args.eval_dir / 'pred').exists():
+            raise FileNotFoundError(f"Could not find 'pred' directory in {args.eval_dir}")
+    else:
+        if (args.eval_dir / 'gt').exists() or (args.eval_dir / 'pred').exists():
+            raise FileExistsError(f"Directories 'gt' and 'pred' already exist in {args.eval_dir}. "
+                                  f"Either remove them before running the script, or do not supply preds_dir to use "
+                                  f"the existing gt and pred eval dirs.")
 
     main(args)
