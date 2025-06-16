@@ -233,11 +233,11 @@ class DataModule(L.LightningDataModule):
         return SubjectsLoader(patches_validation_set, batch_size=self.config.validation_batch_size)
 
     def load_subject(self, subj_dir: Path) -> Union[tio.Subject, None]:
-        filepaths = {seq: get_ext(subj_dir, seq) for seq in self.config.modalities}
-        if not all([f is not None for f in filepaths.values()]):
-            # Skip this subject if any of the modalities are missing
+        filepath = get_ext(subj_dir, self.config.modalities[0])
+        if filepath is None:
+            # Skip this subject if file does not exist
             return
-        images = {seq: tio.ScalarImage(f) for seq, f in filepaths.items()}
+        images = {self.config.modalities[0]: tio.ScalarImage(filepath)}
 
         seg_path = get_ext(subj_dir, 'seg')
         sc_seg_path = get_ext(subj_dir, 't2_sc_seg')

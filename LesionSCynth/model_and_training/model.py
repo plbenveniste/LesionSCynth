@@ -38,9 +38,8 @@ class Model(L.LightningModule):
         if 'unet' in loss_params and loss_params['unet'] is None:
             loss_params['unet'] = self.unet
         self.loss_func = config.loss(**loss_params)
-        # Alternative to torch.nn.modules.utils._triple:
         example_array = torch.Tensor(2, 1, *config.patch_size)
-        self.example_input_array = [{seq: example_array for seq in self.config.modalities}]
+        self.example_input_array = example_array
 
     def get_scale_factors(self):
         """ Get the scale factors for each depth in deep supervision based on the kernel sizes of the pooling
@@ -53,9 +52,7 @@ class Model(L.LightningModule):
         return scale_factors
 
     def prepare_batch(self, batch: dict):
-        modalities = self.config.modalities
-
-        inputs = {modality: batch[modality][tio.DATA] for modality in modalities if modality in batch}
+        inputs = batch[self.config.modalities[0]][tio.DATA]  # Only single-modality training supported by this code
         targets = batch['segmentation'][tio.DATA]
 
         if self.unet.deep_supervision:
@@ -69,12 +66,9 @@ class Model(L.LightningModule):
 
         return inputs, targets
 
-    def forward(self, x: dict):
-        if len(self.config.modalities) > 1:
-            input_tensor = torch.cat([x[modality] for modality in self.config.modalities], dim=CHANNELS_DIMENSION)
-        else:
-            input_tensor = x[self.config.modalities[0]]
-        return self.unet(input_tensor)
+    def forward(self, x: torch.Tensor):
+        """ Forward pass through the model. """
+        return self.unet(x)
 
     def step(self, batch: dict):
         inputs, targets = self.prepare_batch(batch)

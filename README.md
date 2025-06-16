@@ -89,8 +89,7 @@ python -m LesionSCynth.testing.inference \
 --orig_dir data/rawdata \
 --preds_dir data/preds \
 --model_dir data/models \
---path_to_bounds data/preprocessed/images/bounds_20250526154026.json \
---modalities t2
+--path_to_bounds data/preprocessed/images/bounds_20250616152016.json 
 ```
 
 ##### Launch evaluation

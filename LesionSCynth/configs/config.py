@@ -33,7 +33,7 @@ class Config:
     gradient_clip_val = 12
 
     # region Data --------------------------------------------------------------------------
-    modalities = ['t2']
+    modalities = ['t2']  # Only single-modality training is supported by this code
 
     # *** The below paths need to be set for your data and dir structure ***
     data_dir = Path('data/preprocessed/train')  # The root directory for the training data

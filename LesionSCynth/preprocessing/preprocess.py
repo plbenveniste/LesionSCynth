@@ -18,7 +18,7 @@ import math
 import json
 
 from ..im_utils import read_extract, resample_spacing, new_image_from_ref, sitk_to_numpy, get_bbox_bounds, \
-    bbox, bbox_sitk, resample_to_ref
+    bbox_sitk, resample_to_ref
 
 
 def largest_cc_mask(mask: np.ndarray) -> np.ndarray:
@@ -266,6 +266,7 @@ def process_sc_segs(vol_dir: Path, out_dir: Path, metadata_df: pd.DataFrame) -> 
         return
 
     vol_id = vol_dir.name
+    file = 't2.nii.gz'
 
     metadata_df.id = metadata_df.id.astype(str)
     metadata = metadata_df[metadata_df['id'] == vol_id]
@@ -274,61 +275,57 @@ def process_sc_segs(vol_dir: Path, out_dir: Path, metadata_df: pd.DataFrame) -> 
         raise ValueError(f'Metadata not found for {vol_id}')
     is_lower = metadata['section'].values[0] == 'thor'
 
-    for file in ['t2.nii.gz', 'stir.nii.gz']:
-        if (out_dir / file.replace('.nii.gz', '_sc_seg_processed.nii.gz')).exists():
-            logging.info(f'Skipping sc_seg generation for {vol_id} {file.replace(".nii.gz", "")} '
-                         f'as it already exists.')
-            continue
+    if (out_dir / file.replace('.nii.gz', '_sc_seg_processed.nii.gz')).exists():
+        logging.info(f'Skipping sc_seg generation for {vol_id} {file.replace(".nii.gz", "")} '
+                     f'as it already exists.')
+        return
 
-        anat_path = vol_dir / file
-        if not anat_path.exists():
-            if file == 'stir.nii.gz':
-                continue
-            else:
-                raise FileNotFoundError(f'File {anat_path} not found.')
+    anat_path = vol_dir / file
+    if not anat_path.exists():
+        raise FileNotFoundError(f'File {anat_path} not found.')
 
-        # Get the spinal cord segmentation
-        get_sc_seg(anat_path, out_dir / file.replace('.nii.gz', '_sc_seg.nii.gz'),
-                   contrast='T2w', upper_or_lower='upper')
+    # Get the spinal cord segmentation
+    get_sc_seg(anat_path, out_dir / file.replace('.nii.gz', '_sc_seg.nii.gz'),
+               contrast='T2w', upper_or_lower='upper')
 
-        sc_seg_im = sitk.ReadImage(out_dir / file.replace('.nii.gz', '_sc_seg.nii.gz'))
-        sc_seg_im = sitk.DICOMOrient(sc_seg_im, 'LAS')
-        sc_seg_arr = sitk_to_numpy(sc_seg_im)
-        # Lumbar seg
-        if is_lower:
-            get_sc_seg(anat_path, out_dir / file.replace('.nii.gz', '_sc_seg_lumbar.nii.gz'),
-                        contrast='T2w', upper_or_lower='lower')
+    sc_seg_im = sitk.ReadImage(out_dir / file.replace('.nii.gz', '_sc_seg.nii.gz'))
+    sc_seg_im = sitk.DICOMOrient(sc_seg_im, 'LAS')
+    sc_seg_arr = sitk_to_numpy(sc_seg_im)
+    # Lumbar seg
+    if is_lower:
+        get_sc_seg(anat_path, out_dir / file.replace('.nii.gz', '_sc_seg_lumbar.nii.gz'),
+                    contrast='T2w', upper_or_lower='lower')
 
-            sc_seg_lumbar = sitk.ReadImage(out_dir / file.replace('.nii.gz', '_sc_seg_lumbar.nii.gz'))
-            sc_seg_lumbar = sitk.DICOMOrient(sc_seg_lumbar, 'LAS')
-            sc_seg_lumbar_arr = sitk_to_numpy(sc_seg_lumbar)
-            try:
-                sc_seg_arr = combine_sc_seg(sc_seg_lumbar_arr, sc_seg_arr)
-            except ValueError as e:
-                raise ValueError(f'Error combining lumbar spinal cord segmentations for {vol_id}: {e}')
+        sc_seg_lumbar = sitk.ReadImage(out_dir / file.replace('.nii.gz', '_sc_seg_lumbar.nii.gz'))
+        sc_seg_lumbar = sitk.DICOMOrient(sc_seg_lumbar, 'LAS')
+        sc_seg_lumbar_arr = sitk_to_numpy(sc_seg_lumbar)
+        try:
+            sc_seg_arr = combine_sc_seg(sc_seg_lumbar_arr, sc_seg_arr)
+        except ValueError as e:
+            raise ValueError(f'Error combining lumbar spinal cord segmentations for {vol_id}: {e}')
 
-        # Apply closing
-        sc_seg_arr = binary_closing(sc_seg_arr, footprint=np.ones((3, 3, 3)))
+    # Apply closing
+    sc_seg_arr = binary_closing(sc_seg_arr, footprint=np.ones((3, 3, 3)))
 
-        # Take the largest connected component
-        largest_cc = largest_cc_mask(sc_seg_arr)
+    # Take the largest connected component
+    largest_cc = largest_cc_mask(sc_seg_arr)
 
-        # Apply opening slicewise to remove small isolated regions on each slice
-        sc_seg_arr = np.zeros(sc_seg_arr.shape, dtype=np.uint8)
-        for i in range(sc_seg_arr.shape[0]):
-            sc_seg_arr[i] = binary_opening(largest_cc[i], footprint=np.ones((3, 3)))
+    # Apply opening slicewise to remove small isolated regions on each slice
+    sc_seg_arr = np.zeros(sc_seg_arr.shape, dtype=np.uint8)
+    for i in range(sc_seg_arr.shape[0]):
+        sc_seg_arr[i] = binary_opening(largest_cc[i], footprint=np.ones((3, 3)))
 
-        if not is_lower:
-            # Extrapolate downwards for upper acquisitions
-            sc_seg_arr = extrapolate_sc_seg(sc_seg_arr, upper_or_lower='upper')
+    if not is_lower:
+        # Extrapolate downwards for upper acquisitions
+        sc_seg_arr = extrapolate_sc_seg(sc_seg_arr, upper_or_lower='upper')
 
-        # Write to file
-        sc_seg_im = new_image_from_ref(sc_seg_arr, sc_seg_im)
-        sitk.WriteImage(sc_seg_im, out_dir / file.replace('.nii.gz', '_sc_seg_processed.nii.gz'))
+    # Write to file
+    sc_seg_im = new_image_from_ref(sc_seg_arr, sc_seg_im)
+    sitk.WriteImage(sc_seg_im, out_dir / file.replace('.nii.gz', '_sc_seg_processed.nii.gz'))
 
-        # Symlink the original images
-        if not (out_dir / file).exists():
-            (out_dir / file).symlink_to(anat_path)
+    # Symlink the original images
+    if not (out_dir / file).exists():
+        (out_dir / file).symlink_to(anat_path)
 
     if not (out_dir / 'seg.nii.gz').exists():
         (out_dir / 'seg.nii.gz').symlink_to(vol_dir / 'seg.nii.gz')
@@ -347,70 +344,6 @@ def crop_around_sc(im: sitk.Image, sc_seg: sitk.Image, crop_size: Tuple[int, int
     im_cropped = im[x_crop_start:x_crop_end, y_crop_start:y_crop_end, :]
     sc_seg_cropped = sc_seg[x_crop_start:x_crop_end, y_crop_start:y_crop_end, :]
     return im_cropped, sc_seg_cropped
-
-
-def register_stir_to_t2(dirpath: Path, t2_im: sitk.Image, stir_im: sitk.Image, t2_sc_seg: sitk.Image,
-                        stir_sc_seg: sitk.Image) -> Tuple[sitk.Image, sitk.Image]:
-    """Register the STIR image to the T2 image. Then warp the spinal cord segmentation using this transform, and
-    check the dice overlap between the two spinal cord segmentations. A new sub directory will be created within this
-    called reg_results.
-    Args:
-        dirpath: Path to the directory to contain the registration results and intermediate files.
-        t2_im: sitk.Image of the T2 image.
-        stir_im: sitk.Image of the STIR image.
-        t2_sc_seg: sitk.Image of the spinal cord segmentation from the T2 image.
-        stir_sc_seg: sitk.Image of the spinal cord segmentation from the STIR image.
-    Returns:
-        stir_im_reg: sitk.Image of the registered STIR image.
-        stir_sc_seg_reg: sitk.Image of the registered spinal cord segmentation from the STIR image.
-    """
-    sitk.WriteImage(t2_im, dirpath / 't2_sc_cropped.nii.gz')
-    sitk.WriteImage(stir_im, dirpath / 'stir_sc_cropped.nii.gz')
-    sitk.WriteImage(t2_sc_seg, dirpath / 't2_sc_seg_sc_cropped.nii.gz')
-    sitk.WriteImage(stir_sc_seg, dirpath / 'stir_sc_seg_sc_cropped.nii.gz')
-
-    # 7. Register STIR to T2.
-    if not (dirpath / 'stir_reg.nii.gz').exists():
-        call_args = ['sct_register_multimodal', '-i', str(dirpath / 'stir_sc_cropped.nii.gz'),
-                     '-d', str(dirpath / 't2_sc_cropped.nii.gz'), '-param', 'step=1,type=im,algo=dl',
-                     '-o', str(dirpath / 'stir_sc_cropped_reg.nii.gz'), '-v', '0',
-                     '-ofolder', str(dirpath / 'reg_results')]
-
-        with open(args.output_dir / 'registration.log', 'w') as f:
-            subprocess.run(call_args, stdout=f, stderr=f)
-
-        # Symlink to the main processing directory
-        (dirpath / 'stir_reg.nii.gz').symlink_to('reg_results/stir_sc_cropped_reg.nii.gz')
-    else:
-        logging.info('Registration already performed, skipping.')
-
-    # 7.a Warp the SC seg to the T2 image
-    call_args = ['sct_apply_transfo', '-x', 'nn', '-i', str(dirpath / 'stir_sc_seg_sc_cropped.nii.gz'),
-                 '-d', str(dirpath / 't2_sc_cropped.nii.gz'),
-                 '-w', str(dirpath / 'reg_results' / 'warp_stir_sc_cropped2t2_sc_cropped.nii.gz'),
-                 '-o', str(dirpath / 'stir_sc_seg_reg.nii.gz'), '-v', '0']
-
-    with open(args.output_dir / 'registration.log', 'a') as f:
-        subprocess.run(call_args, stdout=f, stderr=f)
-
-    # Read the transformed images
-    stir_im_reg = sitk.ReadImage(dirpath / 'stir_reg.nii.gz')
-    stir_sc_seg_reg = sitk.ReadImage(dirpath / 'stir_sc_seg_reg.nii.gz')
-
-    # Get Dice between the two SC segmentations
-    stir_sc_seg_reg_arr = sitk_to_numpy(stir_sc_seg_reg)
-    t2_sc_seg_arr = sitk_to_numpy(t2_sc_seg)
-    stir_sc_seg_orig_arr = sitk_to_numpy(stir_sc_seg)
-
-    dice_before = 1 - dice(stir_sc_seg_orig_arr.flatten(), t2_sc_seg_arr.flatten())
-    dice_after = 1 - dice(stir_sc_seg_reg_arr.flatten(), t2_sc_seg_arr.flatten())
-
-    # Write to file inside registration directory
-    with open(dirpath / 'reg_results' / 'dice_scores.txt', 'w') as f:
-        f.write(f'Dice before registration: {round(dice_before, 4)}\n')
-        f.write(f'Dice after registration: {round(dice_after, 4)}\n')
-
-    return stir_im_reg, stir_sc_seg_reg
 
 
 def _find_crop_start_end(coord_ctr: np.ndarray, crop_size: int, im_dim: int, shift=True):
@@ -517,75 +450,45 @@ def crop_image_around_centerline(im_data: np.ndarray, ctr_data: Tuple[np.ndarray
 
 
 def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict) -> Dict:
-    """ Processes a single volume, i.e. a single folder containing t2.nii.gz, seg.nii.gz and maybe stir.nii.gz
-    1. Get the spinal cord segmentations from T2 and STIR, if available
+    """ Processes a single volume, i.e. a single folder containing t2.nii.gz and seg.nii.gz
+    1. Get the spinal cord segmentations from T2
     2. Convert to LAS orientation
     3. Resample T2 to 0.5mm isotropic resolution
-       If STIR available:
-           4. Crop T2 around SC mask.
-           5. Resample STIR to T2 space.
-           6. Save cropped T2 and STIR to file (for SCT registration function).
-           7. Register STIR to T2.
-    8. Extract the centreline/centre of mass from the T2 SC mask.
-    9. Crop and shift all images around the centreline.
+    4. Extract the centreline/centre of mass from the T2 SC mask.
+    5. Crop and shift all images around the centreline.
 
     Args:
         volume_id: ID of the volume to process.
         metadata_df: DataFrame containing the metadata for the volumes, including the section (upper/lower).
         args: dict containing the arguments from argparse.
     Returns:
-        Dictionary with 'bbox_bounds' -> bounding box used to crop the image, if applicable;
-                        'coords_uncrop' -> coordinates used to crop each axial slice.
+        coords_uncrop - coordinates used to crop each axial slice.
     """
     orig_vol_dir = args.data_dir / volume_id
-    stir_path = orig_vol_dir / 'stir.nii.gz'
     seg_path = orig_vol_dir / 'seg.nii.gz'
     intermediate_dir = args.output_dir / volume_id / 'intermediate_files'
     intermediate_dir.mkdir(exist_ok=True, parents=True)
 
-    # 1. Get the spinal cord segmentations from T2 and STIR, if available
+    # 1. Get the spinal cord segmentations from T2  ------------------------------------------------------
     try:
         process_sc_segs(orig_vol_dir, intermediate_dir, metadata_df)
     except Exception as e:
         raise ValueError(f'Error processing spinal cord segmentations for {volume_id}: {e}')
 
-    # 2. Convert to LAS orientation
+    # 2. Convert to LAS orientation  ------------------------------------------------------
     t2_im = sitk.ReadImage(orig_vol_dir / 't2.nii.gz')
     t2_im = sitk.DICOMOrient(t2_im, 'LAS')
 
-    # 3. Resample T2 and SC seg to new spacing
+    # 3. Resample T2 and SC seg to new spacing ------------------------------------------------------
     t2_resampled = resample_spacing(t2_im, args.spacing)
     t2_sc_seg_im = sitk.ReadImage(intermediate_dir / 't2_sc_seg_processed.nii.gz')
     t2_sc_seg_im = resample_to_ref(t2_sc_seg_im, t2_resampled, interpolator=sitk.sitkNearestNeighbor)
-
-    # Check if STIR exists
-    process_stir = False
-    if stir_path.exists():
-        if not (intermediate_dir / 'stir_sc_seg_processed.nii.gz').exists():
-            logging.warning(f'STIR file exists but SC seg not found for {volume_id}. Skipping STIR processing.')
-        else:
-            process_stir = True
-
-    if process_stir:
-        # 4. Crop T2 around SC mask (rectangular bounding box + 24 voxels each side)
-        t2_resampled, t2_sc_seg_im = crop_around_sc(t2_resampled, t2_sc_seg_im, (24, 24))
-
-        # 5. Resample STIR to T2 space.
-        stir_im = sitk.ReadImage(stir_path)
-        stir_im = resample_to_ref(stir_im, t2_resampled)
-        stir_sc_seg_im = sitk.ReadImage(intermediate_dir / 'stir_sc_seg_processed.nii.gz')
-        stir_sc_seg_im = resample_to_ref(stir_sc_seg_im, t2_resampled, interpolator=sitk.sitkNearestNeighbor)
-
-        # 6. Save cropped T2 and STIR to file (for SCT registration function).
-        stir_reg, stir_sc_seg_reg = register_stir_to_t2(intermediate_dir, t2_resampled, stir_im, t2_sc_seg_im, stir_sc_seg_im)
-        stir_reg_arr = sitk_to_numpy(stir_reg)
-        stir_sc_seg_arr = sitk_to_numpy(stir_sc_seg_reg)
 
     # Extract the numpy arrays
     t2_resampled_arr = sitk_to_numpy(t2_resampled)
     t2_sc_seg_arr = sitk_to_numpy(t2_sc_seg_im)
 
-    # 9. Resample lesion seg if it exists. --------------------------------------------------------------
+    # 3b. Resample lesion seg if it exists. --------------------------------------------------------------
     if seg_path.exists():
         seg_im = sitk.ReadImage(seg_path)
         seg_im = resample_to_ref(seg_im, t2_resampled, interpolator=sitk.sitkNearestNeighbor)
@@ -594,15 +497,7 @@ def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict)
     else:
         seg_arr = np.zeros(t2_sc_seg_arr.shape, dtype=np.uint8)  # Dummy array.
 
-    # 10. Crop to bounding box of STIR, if it exists. (STIR already resampled to T2, so is cropped to T2 bbox) ------
-    if process_stir:
-        bbox_bounds = get_bbox_bounds(stir_reg_arr)
-        stir_reg_arr, [t2_resampled_arr, seg_arr, t2_sc_seg_arr, stir_sc_seg_arr] = \
-            bbox(stir_reg_arr, [t2_resampled_arr, seg_arr, t2_sc_seg_arr, stir_sc_seg_arr])
-    else:
-        bbox_bounds = []
-
-    # 11. Extract the centreline/centre of mass from the T2 spinal cord segmentation -------------------------------
+    # 4. Extract the centreline/centre of mass from the T2 spinal cord segmentation -------------------------------
     ctr_data = centre_of_mass_per_slice(t2_sc_seg_arr)
     # Extrapolate the centre of mass data along the S-I axis for a certain number of axial slices.
     ctr_data = extrapolate_ctr_data(ctr_data, n_slices_up=10, n_slices_down=10)
@@ -613,7 +508,7 @@ def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict)
     # Apply smoothing
     ctr_data = (uniform_filter1d(ctr_data[0], size=9), uniform_filter1d(ctr_data[1], size=9), ctr_data[2])
 
-    # 12. Crop and shift all images around the centreline including SC seg ------------------------------------------
+    # 5. Crop and shift all images around the centreline including SC seg ------------------------------------------
 
     # T2 anat image
     t2_cropped_arr, coords_uncrop = crop_image_around_centerline(t2_resampled_arr, ctr_data, args.crop_size)
@@ -626,18 +521,6 @@ def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict)
     # Save to file
     t2_sc_seg_cropped = new_image_from_ref(t2_sc_seg_cropped_arr, t2_resampled)
     sitk.WriteImage(t2_sc_seg_cropped, intermediate_dir / 't2_sc_seg_cropped.nii.gz')
-
-    # STIR anat image and spinal cord seg
-    if process_stir:
-        stir_cropped, _ = crop_image_around_centerline(stir_reg_arr, ctr_data, args.crop_size)
-        stir_cropped = new_image_from_ref(stir_cropped, t2_resampled)
-        sitk.WriteImage(stir_cropped, intermediate_dir / 'stir_cropped.nii.gz')
-
-        stir_sc_seg_cropped, _ = crop_image_around_centerline(stir_sc_seg_arr, ctr_data, args.crop_size)
-        # Apply closing for smoother edges and slice-wise opening to remove small isolated regions on outer slices
-        stir_sc_seg_cropped = close_and_open(stir_sc_seg_cropped)
-        stir_sc_seg_cropped = new_image_from_ref(stir_sc_seg_cropped, t2_resampled)
-        sitk.WriteImage(stir_sc_seg_cropped, intermediate_dir / 'stir_sc_seg_cropped.nii.gz')
 
     # Lesion seg
     if seg_path.exists():
@@ -652,12 +535,8 @@ def process_single_volume(volume_id: str, metadata_df: pd.DataFrame, args: Dict)
         (args.output_dir / volume_id / 't2_sc_seg.nii.gz').symlink_to('intermediate_files/t2_sc_seg_cropped.nii.gz')
     if seg_path.exists() and not (args.output_dir / volume_id / 'seg.nii.gz').exists():
         (args.output_dir / volume_id / 'seg.nii.gz').symlink_to('intermediate_files/seg_cropped.nii.gz')
-    if stir_path.exists() and not (args.output_dir / volume_id / 'stir.nii.gz').exists():
-        (args.output_dir / volume_id / 'stir.nii.gz').symlink_to('intermediate_files/stir_cropped.nii.gz')
-    if stir_path.exists() and not (args.output_dir / volume_id / 'stir_sc_seg.nii.gz').exists():
-        (args.output_dir / volume_id / 'stir_sc_seg.nii.gz').symlink_to('intermediate_files/stir_sc_seg_cropped.nii.gz')
 
-    return {'uncrop': coords_uncrop, 'bbox': bbox_bounds}
+    return coords_uncrop
 
 
 def process_lesions(vol_id: str, data_dir: Path, out_dirpath: Path) -> None:
@@ -705,7 +584,7 @@ def process_lesions(vol_id: str, data_dir: Path, out_dirpath: Path) -> None:
 def main(args):
     args.output_dir.mkdir(exist_ok=True, parents=True)
     tstamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    logging.basicConfig(filename=args.output_dir / f'preprocess_t2stir_{tstamp}.log', level=logging.INFO)
+    logging.basicConfig(filename=args.output_dir / f'preprocess_t2_{tstamp}.log', level=logging.INFO)
 
     metadata_df = pd.read_csv(args.metadata_path, low_memory=False)
     metadata_df.id = metadata_df.id.astype(str)
@@ -740,7 +619,7 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Preprocess T2 and STIR images (cropped+shifted)')
+    parser = argparse.ArgumentParser(description='Preprocess T2 images (cropped+shifted)')
     parser.add_argument('-d', '--data_dir', type=Path, required=True,
                         help='Path to the directory containing the volumes to be preprocessed.')
     parser.add_argument('-o', '--output_dir', type=Path, required=True,

@@ -44,7 +44,7 @@ def load_model(model_path, config, device):
     return model
 
 
-def get_prediction(subject, model, pred_dir, config, device, channels_dimension, modalities, softmax=True
+def get_prediction(subject, model, pred_dir, config, device, channels_dimension, softmax=True
                    ) -> tio.ScalarImage:
     pmap_path = pred_dir / f'{subject["name"]}_pmap.nii.gz'
     if pmap_path.exists():
@@ -62,18 +62,10 @@ def get_prediction(subject, model, pred_dir, config, device, channels_dimension,
     patch_loader = DataLoader(grid_sampler, batch_size=config.validation_batch_size)  # type: ignore
     aggregator = tio.inference.GridAggregator(grid_sampler)
 
-    # Retrieve the available modalities - allow for different modalities to be specified in args/config
-    modalities = config.modalities if modalities is None else modalities
-
     with torch.no_grad():
         for i, patches_batch in enumerate(patch_loader):
-            inputs = {seq: patches_batch[seq][tio.DATA] for seq in subject.keys() if seq in modalities}
-
-            # Check if the inputs are empty
-            if not inputs:
-                raise ValueError(f'No inputs found for {subject["name"]}. Skipping prediction generation.')
-
-            inputs = {seq: tensor.to(dtype=torch.float32, device=device) for seq, tensor in inputs.items()}
+            inputs = patches_batch[config.modalities[0]][tio.DATA]
+            inputs = inputs.to(dtype=torch.float32, device=device)
             locations = patches_batch[tio.LOCATION]
 
             logits = model(inputs)
@@ -83,7 +75,7 @@ def get_prediction(subject, model, pred_dir, config, device, channels_dimension,
             if softmax:
                 probabilities = probabilities.softmax(dim=channels_dimension)
             if isinstance(probabilities, dict) and len(probabilities) == 1:
-                probabilities = probabilities[modalities[0]]
+                probabilities = probabilities[config.modalities[0]]
             aggregator.add_batch(probabilities, locations)
 
     foreground = aggregator.get_output_tensor()
@@ -96,7 +88,7 @@ def get_prediction(subject, model, pred_dir, config, device, channels_dimension,
     return prediction
 
 
-def uncrop_image(ref_im, crop_im, crop_start_coords, bbox_coords):
+def uncrop_image(ref_im, crop_im, crop_start_coords):
     """
     Adapted from spinalcordtoolbox https://github.com/spinalcordtoolbox/spinalcordtoolbox/blob/master/spinalcordtoolbox/deepseg_/sc.py#LL379C1-L392C1
     Paste the cropped segmentation image into the original image space.
@@ -107,18 +99,14 @@ def uncrop_image(ref_im, crop_im, crop_start_coords, bbox_coords):
     data_uncrop = np.zeros_like(sitk_to_numpy(ref_im), dtype=np.float32)
 
     crop_size_x, crop_size_y = data_crop.shape[:2]
-    # Extract bbox pairs of coordinates.
-    if bbox_coords:
-        (bbox_0, _), (bbox_1, _), (bbox_2, _) = bbox_coords
-    else:
-        bbox_0, bbox_1, bbox_2 = 0, 0, 0
+
     for i_z, zz in enumerate(z_crop_lst):
         z_slice = data_crop[:, :, i_z]
-        x_start, y_start = int(x_crop_lst[i_z]) + bbox_0, int(y_crop_lst[i_z]) + bbox_1
+        x_start, y_start = int(x_crop_lst[i_z]), int(y_crop_lst[i_z])
         x_end = x_start + crop_size_x if x_start + crop_size_x < data_uncrop.shape[0] else data_uncrop.shape[0]
         y_end = y_start + crop_size_y if y_start + crop_size_y < data_uncrop.shape[1] else data_uncrop.shape[1]
         try:
-            data_uncrop[x_start:x_end, y_start:y_end, zz + bbox_2] = z_slice[0:(x_end - x_start), 0:(y_end - y_start)]
+            data_uncrop[x_start:x_end, y_start:y_end, zz] = z_slice[0:(x_end - x_start), 0:(y_end - y_start)]
         except:
             continue
 
@@ -126,7 +114,7 @@ def uncrop_image(ref_im, crop_im, crop_start_coords, bbox_coords):
 
 
 def process_cropped_shifted(subject, model, input_parent_dir: Path, orig_dir: Path, preds_dir: Path, config: Config,
-                            path_to_bounds: Path, device: torch.device, CHANNELS_DIMENSION: int, modalities: list):
+                            path_to_bounds: Path, device: torch.device, CHANNELS_DIMENSION: int):
     volume_id = subject['name']
     intermediate_dir = input_parent_dir / volume_id / 'intermediate_files'
 
@@ -136,7 +124,7 @@ def process_cropped_shifted(subject, model, input_parent_dir: Path, orig_dir: Pa
     with open(path_to_bounds, 'r') as f:
         coords_dict = json.load(f)
 
-    seg_im = get_prediction(subject, model, preds_dir, config, device, CHANNELS_DIMENSION, modalities)
+    seg_im = get_prediction(subject, model, preds_dir, config, device, CHANNELS_DIMENSION)
     seg_im = seg_im.as_sitk()  # convert to SITK image from PyTorch Tensor
 
     # Re-sample to preprocessed space, in case there was padding applied before input to model
@@ -152,19 +140,18 @@ def process_cropped_shifted(subject, model, input_parent_dir: Path, orig_dir: Pa
         return sitk.ReadImage(path1) if path1.exists() else sitk.ReadImage(path2)
 
     ref_im_orig = read_if_exists(orig_dir / volume_id / 'seg.nii.gz',
-                                 orig_dir / volume_id / f'{args.modalities[0]}.nii.gz')
+                                 orig_dir / volume_id / f'{config.modalities[0]}.nii.gz')
     ref_im_unpadded = read_if_exists(intermediate_dir / 'seg_cropped.nii.gz',
-                                     intermediate_dir / f'{args.modalities[0]}_cropped.nii.gz')
-    if (intermediate_dir / f'{args.modalities[0]}_sc_cropped.nii.gz').exists():
-        ref_im_resampled = sitk.ReadImage(intermediate_dir / f'{args.modalities[0]}_sc_cropped.nii.gz')
+                                     intermediate_dir / f'{config.modalities[0]}_cropped.nii.gz')
+    if (intermediate_dir / f'{config.modalities[0]}_sc_cropped.nii.gz').exists():
+        ref_im_resampled = sitk.ReadImage(intermediate_dir / f'{config.modalities[0]}_sc_cropped.nii.gz')
     else:
         ref_im_resampled = sitk.DICOMOrient(ref_im_orig, 'LAS')
         ref_im_resampled = resample_spacing(ref_im_resampled, ref_im_unpadded.GetSpacing())
 
     # Uncrop the cropped and shifted image back to the original space
-    ref_coords_uncrop = coords_dict[volume_id]['uncrop']
-    bbox_bounds = coords_dict[volume_id]['bbox']
-    seg_uncropped = uncrop_image(ref_im_resampled, seg_im, ref_coords_uncrop, bbox_bounds)
+    ref_coords_uncrop = coords_dict[volume_id]
+    seg_uncropped = uncrop_image(ref_im_resampled, seg_im, ref_coords_uncrop)
     seg_to_orig = resample_to_ref(seg_uncropped, ref_im_orig)
     sitk.WriteImage(seg_to_orig, preds_dir / f'{volume_id}_pmap_orig_space.nii.gz')
 
@@ -178,7 +165,7 @@ def process_cropped_shifted(subject, model, input_parent_dir: Path, orig_dir: Pa
             sitk.WriteImage(label, segmentation_path)
 
     # Create symlinks to the original images
-    for modality in args.modalities + ['seg']:
+    for modality in config.modalities + ['seg']:
         symlink_path = preds_dir / f'{modality}.nii.gz'
         path_orig = Path(args.orig_dir) / volume_id / f'{modality}.nii.gz'
         if not (symlink_path.is_symlink() or symlink_path.exists()):
@@ -234,14 +221,14 @@ def main(args):
             if args.safe_mode:
                 try:
                     process_cropped_shifted(subject, model, args.input_dir, args.orig_dir, pred_dir, config,
-                                            args.path_to_bounds, device, CHANNELS_DIMENSION, args.modalities)
+                                            args.path_to_bounds, device, CHANNELS_DIMENSION)
                 except Exception as e:
                     logging.exception(f'Error processing {subject["name"]}: {e}')
                     print(f'Error processing {subject["name"]}. Skipping... \nError message: {e}')
                     continue
             else:
                 process_cropped_shifted(subject, model, args.input_dir, args.orig_dir, pred_dir, config,
-                                        args.path_to_bounds, device, CHANNELS_DIMENSION, args.modalities)
+                                        args.path_to_bounds, device, CHANNELS_DIMENSION)
 
     # Log the time taken
     end_time = time.time()
@@ -264,10 +251,7 @@ if __name__ == "__main__":
                         help='Path to the saved model checkpoint(s), if --model_dir is not supplied. '
                              'Can supply multiple models but they should share the same config file.')
     parser.add_argument('--path_to_bounds', '-b', type=Path, default=None,
-                        help='Path to bbox coordinates for uncropping data preprocessed with cropping/shifting.')
-    parser.add_argument('--modalities', '-ms', type=str, nargs='+', default=None,
-                        help='Names of the sequences to be processed, e.g. t2Sag, stirSag. If None, then the modalities'
-                             'argument of the model config file will be used.')
+                        help='Path to coordinates for uncropping data preprocessed with cropping/shifting.')
     parser.add_argument('--config', '-c', type=Path, default=None,
                         help='Path to the config file, if --model_dir is not supplied')
     parser.add_argument('--thresholds', '-thr', type=float, nargs='+', default=[0.5],
