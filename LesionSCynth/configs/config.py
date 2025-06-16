@@ -140,7 +140,7 @@ class Config:
     scheduler_args, optimizer_args = None, None  # These are set in update_optimizer_scheduler()
     training_transform, validation_transform = None, None
     transform_kwargs = {}
-    check_val_every_n_epoch = None
+    check_val_every_n_epoch = None  # Will be set to max_epochs // 100 in update_params()
     sampler_args = {}
 
     # endregion
