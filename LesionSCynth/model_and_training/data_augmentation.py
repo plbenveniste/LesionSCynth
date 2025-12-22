@@ -3,7 +3,6 @@ import os
 import random
 from typing import Tuple, Optional, Union, List, Generator
 import argparse
-
 import scipy.stats
 import torch
 import torchio as tio
@@ -72,6 +71,7 @@ def find_seg_files(lesion_dir) -> List:
         for file in files
         if file.endswith('.nii.gz') and 'seg' in file
     ]
+
 
 class LesionSCynth(tio.Transform):
     r"""Randomly add predefined lesion shapes by increasing contrast.
@@ -881,17 +881,10 @@ if __name__ == '__main__':
     b_transformed = (b - loc) / scale
     factor_dist = scipy.stats.truncnorm(a=a_transformed, b=b_transformed, loc=loc, scale=scale)
 
-    if args.method in ['lesionscynth', 'LSC']:
-        synth = LesionSCynth(lesion_dir=args.lesion_dir, modalities=['image'], blur_radius=2, blur_sigma=0.67,
+    synth = LesionSCynth(lesion_dir=args.lesion_dir, modalities=['image'], blur_radius=2, blur_sigma=0.67,
                              gaussian_spatial=True, min_factor_gaussian=0.015, factor_distribution=factor_dist,
                              other_transforms=tio.RandomAffine(scales=0.1, degrees=(5, 5, 45), center='image', p=0.5)
                              )
-    elif args.method in ['lesionmix', 'LM']:
-        synth = LesionMixPopulate(lesion_dir=args.lesion_dir, load_distribution_type='uniform',)
-                                  # Combine LesionMix with the contrast vs. neighbourhood method of LesionSCynth
-                                  # factor_distribution=factor_dist)
-    else:
-        raise ValueError(f'Unknown method {args.method}.')
 
     # Apply the augmentation
     augmented_subject = synth(subject)
