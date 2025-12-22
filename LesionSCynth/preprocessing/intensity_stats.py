@@ -1,3 +1,6 @@
+""""
+From my understanding this script extracts the intensity statistics of lesions and spinal cord from MS MRI images.
+"""
 import SimpleITK as sitk
 import numpy as np
 import pandas as pd
@@ -8,50 +11,14 @@ from tqdm import tqdm
 from datetime import datetime
 import logging
 import argparse
-
-from ..im_utils import (new_image_from_ref, sitk_to_numpy, dilate_slicewise, erode_slicewise,
+import json
+import os
+import sys
+file_path = os.path.abspath(os.path.dirname(__file__))
+root_path = os.path.abspath(os.path.join(file_path, ".."))
+sys.path.insert(0, root_path)
+from im_utils import (new_image_from_ref, sitk_to_numpy, dilate_slicewise, erode_slicewise,
                         check_matching_geom, resample_to_ref, read_orient_extract)
-
-
-def check_and_write(im: sitk.Image, path: Path, overwrite: bool = False) -> None:
-    """
-    Saves a SimpleITK image to disk, raising an error if the file exists and overwrite is False.
-    Args:
-        im (sitk.Image): The image to write.
-        path (Path): Destination path for the image.
-        overwrite (bool, optional): Whether to overwrite existing files. Defaults to False.
-    Returns:
-        None
-    """
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"File {path} already exists. Add --overwrite to the args to overwrite.")
-    else:
-        sitk.WriteImage(im, path)
-
-
-def setup_logging(out_dir: Path) -> str:
-    """
-    Sets up a log file with a timestamp in the specified output directory.
-    Args:
-        out_dir (Path): Directory in which to store the log file.
-    Returns:
-        str: Timestamp string used in the log filename.
-    """
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    logging.basicConfig(filename=out_dir / f'intensity_analysis_{timestamp}.log', level=logging.INFO)
-    return timestamp
-
-
-def make_outdir(out_dir: Path) -> Path:
-    """
-    Ensures that the specified output directory exists.
-    Args:
-        out_dir (Path): Path to the output directory.
-    Returns:
-        Path: The same path that was passed in, after ensuring it exists.
-    """
-    out_dir.mkdir(exist_ok=True, parents=True)
-    return out_dir
 
 
 def summary_stats(arr: np.ndarray, key_prefix: str = '') -> dict[str, float]:
@@ -77,39 +44,26 @@ def summary_stats(arr: np.ndarray, key_prefix: str = '') -> dict[str, float]:
     }
 
 
-def process_subject(args: argparse.Namespace, subj: Path, out_file_prefix: str) -> list[dict]:
+def process_subject(args: argparse.Namespace, subj_dict: dict) -> list[dict]:
     """
     Processes a single subject by loading images, resampling if needed, and extracting lesion statistics.
     Args:
         args (argparse.Namespace): Parsed command-line arguments.
-        subj (Path): Path to the subject folder.
-        out_file_prefix (str): Prefix to use for output file names.
+        subj_dict (dict): Dictionary containing subject information.
     Returns:
         list[dict]: A list of dictionaries containing lesion and spinal cord statistics.
     """
-    try:
-        anat_arr, anat_im = read_orient_extract(subj / args.anat_name)
-        seg_arr, seg_im = read_orient_extract(args.seg_dir / subj.name / args.seg_name)
-        sc_arr, sc_seg_im = read_orient_extract(args.sc_seg_dir / subj.name / args.sc_seg_name)
+    anat_arr, anat_im = read_orient_extract(subj_dict['scan'])
+    seg_arr, seg_im = read_orient_extract(subj_dict['lesion_seg'])
+    sc_arr, sc_seg_im = read_orient_extract(subj_dict['sc_seg'])
 
-        if args.resample:
-            seg_im, seg_arr = maybe_resample(seg_im, anat_im, seg_arr)
-            sc_seg_im, sc_arr = maybe_resample(sc_seg_im, anat_im, sc_arr)
+    # Compute voxel size in mm^3
+    voxel_size_mm3 = np.prod(seg_im.GetSpacing())
+    # convert to int
+    seg_arr = seg_arr.astype(np.uint8)
 
-        voxel_size_mm3 = np.prod(seg_im.GetSpacing())
-
-        if args.save_cc:
-            # Compute and save the connected components of the lesion seg
-            seg_arr = save_connected_components(seg_arr, seg_im, args, subj.name, out_file_prefix)
-        else:
-            seg_arr = seg_arr.astype(np.uint8)
-
-        return collect_lesion_data(subj.name, anat_arr, seg_arr, sc_arr, sc_seg_im,
-                                   seg_im, voxel_size_mm3, args, out_file_prefix)
-
-    except Exception as e:
-        logging.error(f"Error processing {subj.name}.\n{e}")
-        return []
+    return collect_lesion_data(subj_dict['subject_id'], anat_arr, seg_arr, sc_arr, sc_seg_im,
+                                seg_im, voxel_size_mm3, args)
 
 
 def maybe_resample(im: sitk.Image, ref_im: sitk.Image, arr: np.ndarray,
@@ -130,30 +84,9 @@ def maybe_resample(im: sitk.Image, ref_im: sitk.Image, arr: np.ndarray,
     return im, arr
 
 
-def save_connected_components(seg_arr: np.ndarray, seg_im: sitk.Image, args: argparse.Namespace,
-                              subj_name: str, out_file_prefix: str) -> np.ndarray:
-    """
-    Computes connected components from the segmentation, saves them as a new image, and returns the labeled array.
-    Args:
-        seg_arr (np.ndarray): Binary segmentation array.
-        seg_im (sitk.Image): Reference image used for spatial metadata.
-        args (argparse.Namespace): Parsed command-line arguments, including output directory and overwrite flag.
-        subj_name (str): Subject identifier used in file naming.
-        out_file_prefix (str): Prefix for the output file name.
-    Returns:
-        np.ndarray: Array with labeled connected components.
-    """
-    seg_arr = (seg_arr > 0).astype(np.uint8)
-    seg_cc = label(seg_arr).astype(np.uint8)
-    seg_cc_im = new_image_from_ref(seg_cc, seg_im)
-    cc_out_dir = make_outdir(args.out_dir / 'connected_components' / subj_name)
-    check_and_write(seg_cc_im, cc_out_dir / f'{out_file_prefix}cc.nii.gz', args.overwrite)
-    return seg_cc
-
-
 def collect_lesion_data(subj_name: str, anat_arr: np.ndarray, seg_arr: np.ndarray, sc_arr: np.ndarray,
                         sc_seg_im: sitk.Image, seg_im: sitk.Image, voxel_size_mm3: float,
-                        args: argparse.Namespace, out_file_prefix: str) -> list[dict]:
+                        args: argparse.Namespace) -> list[dict]:
     """
     Extracts statistics for lesions and spinal cord from anatomical and segmentation images.
 
@@ -166,7 +99,6 @@ def collect_lesion_data(subj_name: str, anat_arr: np.ndarray, seg_arr: np.ndarra
         seg_im (sitk.Image): Lesion segmentation image with spatial metadata.
         voxel_size_mm3 (float): Volume of a voxel in cubic millimeters.
         args (argparse.Namespace): Parsed command-line arguments including output directory and save flags.
-        out_file_prefix (str): Prefix for output filenames.
 
     Returns:
         list[dict]: List of dictionaries with lesion and spinal cord statistics.
@@ -181,23 +113,11 @@ def collect_lesion_data(subj_name: str, anat_arr: np.ndarray, seg_arr: np.ndarra
     for dilation_factor in [3, 5, 7]:
         dilated_segs[dilation_factor] = dilate_slicewise(seg_arr, skimage.morphology.disk(dilation_factor),
                                                          slice_axis=0, multi_values=True)
-        if args.save_dilations:
-            dilated_im = new_image_from_ref(dilated_segs[dilation_factor], seg_im, numpy_to_sitk=True)
-            dil_out_dir = make_outdir(args.out_dir / 'dilated_lesions')
-            check_and_write(dilated_im,
-                            dil_out_dir / f'{out_file_prefix}{subj_name}_seg_dilated{dilation_factor}.nii.gz',
-                            args.overwrite)
 
     # The spinal cord mask sometimes has higher intensities because of a partial volume effect with the CSF.
     # Erode the mask slightly to reduce this effect
     erosion_factor = 1
     sc_arr_eroded = erode_slicewise(sc_arr, skimage.morphology.disk(erosion_factor), slice_axis=0, multi_values=False)
-    if args.save_dilations:
-        sc_eroded_im = new_image_from_ref(sc_arr_eroded, sc_seg_im, numpy_to_sitk=True)
-        eroded_out_dir = make_outdir(args.out_dir / 'eroded_spinal_cord')
-        check_and_write(sc_eroded_im,
-                        eroded_out_dir / f'{out_file_prefix}{subj_name}_sc_eroded{erosion_factor}.nii.gz',
-                        args.overwrite)
 
     for les_id in np.unique(seg_arr)[1:]:
         lesion_volume = (seg_arr == les_id).sum() * voxel_size_mm3
@@ -268,68 +188,35 @@ def save_contrast_summary(df, out_path):
 
 
 def main(args):
-    args.out_dir.mkdir(exist_ok=True, parents=True)
-    out_file_prefix = f'{args.out_file}_' if args.out_file is not None else ''
-    timestamp = setup_logging(args.out_dir)
+    # Create output directory
+    output_path = args.out_dir
+    os.makedirs(output_path, exist_ok=True)
 
-    total = len(list(args.anat_dir.iterdir())) if not args.subset else len(args.subset)
+    # Open the msd dataset json file to get lists of images
+    with open(args.msd, 'r') as f:
+        msd_json = json.load(f)
+    images = msd_json['data']
+
+    # initialize output data
     data = []
 
-    with tqdm(total=total) as pbar:
-        for subj in args.anat_dir.iterdir():
-            if args.subset and subj.name not in args.subset:
-                continue
-            data.extend(process_subject(args, subj, out_file_prefix))
-            pbar.update(1)
-
-    if not data:
-        raise ValueError("No data collected. Check the input directories and segmentation files. "
-                         "Check the log file for processing errors.")
-
+    for image in tqdm(images):
+        print(f"Processing subject: {image}")
+        data.extend(process_subject(args, images[image]))
+    
+    # Convert to dataframe and compute additional metrics
     df = pd.DataFrame(data)
     df = compute_additional_metrics(df)
-    df.to_csv(args.out_dir / f'{out_file_prefix}lesion_intensity_stats_{timestamp}.csv', index=False)
 
-    save_contrast_summary(df, out_path=args.out_dir / 'contrast_summary.csv')
+    output_path = os.path.join(args.out_dir, 'lesion_intensity_stats.csv')
+    df.to_csv(output_path, index=False)
+    save_contrast_summary(df, out_path=os.path.join(args.out_dir, 'contrast_summary.csv'))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--anat_dir', '-ad', type=Path, required=True,
-                        help="Directory containing the subject or volume folders. Each folder should contain the anat "
-                             "image, and optionally the lesion seg and/or spinal cord seg images.")
-    parser.add_argument('--seg_dir', '-sd', type=Path, default=None,
-                        help="Optional, if different from the anat_dir. Path to directory containing subject or volume "
-                             "folders that contain the seg images.")
-    parser.add_argument('--sc_seg_dir', '-ssd', type=Path, default=None,
-                        help="Optional, if different from the anat_dir. Path to directory containing subject or volume "
-                             "folders that contain the spinal cord seg images.")
-    parser.add_argument('--anat_name', '-an', type=str, default='t2.nii.gz', help="Name of the anat image file.")
-    parser.add_argument('--seg_name', '-sn', type=str, default='seg.nii.gz', help="Name of the lesion seg image file.")
-    parser.add_argument('--sc_seg_name', '-ssn', type=str, default='t2_sc_seg.nii.gz',
-                        help="Name of the spinal cord seg image file.")
-    parser.add_argument('--resample', '-r', action='store_true',
-                        help="Resample the seg images to the anat image space, if they are in different spaces.")
-    parser.add_argument('--out_dir', '-o', type=Path, required=True, help="Output directory for the results.")
-    parser.add_argument('--out_file', '-of', type=str, default=None, help="Output file prefix for every saved file.")
-    parser.add_argument('--subset', '-s', type=str, nargs='+', default=None, help="Subset of subjects to process.")
-    parser.add_argument('--save_cc', '-cc', action='store_true', help="Save connected components of the lesion seg.")
-    parser.add_argument('--save_dilations', '-ss', action='store_true', help="Save dilated regions of the lesions.")
-    parser.add_argument('--overwrite', '-ow', action='store_true', help="Overwrite existing files.")
-
+    parser.add_argument('--msd', type=Path, required=True, help="Path to the msd dataset json file.")
+    parser.add_argument('--out-dir', '-o', type=Path, required=True, help="Output directory for the results.")
     args = parser.parse_args()
-
-    # Check that the directories exist
-    if not args.anat_dir.exists():
-        raise FileNotFoundError(f"Invalid --anat_dir. Directory {args.anat_dir} does not exist.")
-    if args.seg_dir and not args.seg_dir.exists():
-        raise FileNotFoundError(f"Invalid --seg_dir. Directory {args.seg_dir} does not exist.")
-    if args.sc_seg_dir and not args.sc_seg_dir.exists():
-        raise FileNotFoundError(f"Invalid --sc_seg_dir. Directory {args.sc_seg_dir} does not exist.")
-
-    if args.seg_dir is None:
-        args.seg_dir = args.anat_dir
-    if args.sc_seg_dir is None:
-        args.sc_seg_dir = args.anat_dir
 
     main(args)
