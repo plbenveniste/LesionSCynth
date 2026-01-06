@@ -331,6 +331,14 @@ class LesionSCynth(tio.Transform):
         # In this case, we only add 1 lesion:
         n_lesions = 1
 
+        # Reorient the image to RAS
+        print(subject)
+        print(subject.image)
+        subject.image = tio.ToOrientation('RAS')(subject.image)
+        subject.sc_seg = tio.ToOrientation('RAS')(subject.sc_seg)
+        print(subject)
+        print(subject.image)
+
         for _ in range(n_lesions):
             print(subject.image)
             lesion_im = self.get_lesion()
@@ -339,37 +347,17 @@ class LesionSCynth(tio.Transform):
             # Reorient the lesion to match the subject
             img_orientation = subject.image.orientation
             lesion_im = tio.ToOrientation(''.join(img_orientation))(lesion_im)
-            print(lesion_im)
             # Re-sample the lesion to match the subject resolution
             img_resolution = subject.image.spacing
             lesion_im = tio.Resample(img_resolution, image_interpolation='nearest')(lesion_im)
             print(lesion_im)
-            # Crop the mask along the I-S axis to only keep the lesion
+            # Crop the mask to only keep the box containing the lesion
             bounds = get_bbox_bounds(lesion_im.data[0].numpy())
-            # Only use the IS-bounds to crop
-            IS_axis = lesion_im.orientation.index('S')
-            if IS_axis == None:
-                IS_axis = lesion_im.orientation.index('I')
-            # Initialisation : nothing is removed
             _, X, Y, Z = lesion_im.shape
-            x_l = x_r = y_l = y_r = z_l = z_r = 0
-            if IS_axis == 0:
-                x_min, x_max = bounds[0]
-                x_l = x_min
-                x_r = (X - 1) - x_max
-            elif IS_axis == 1:
-                y_min, y_max = bounds[1]
-                y_l = y_min
-                y_r = (Y - 1) - y_max
-            elif IS_axis == 2:
-                z_min, z_max = bounds[2]
-                z_l = z_min
-                z_r = (Z - 1) - z_max
+            x_l, x_r = bounds[0][0], X - 1 -bounds[0][1]
+            y_l, y_r = bounds[1][0], Y - 1 - bounds[1][1]
+            z_l, z_r = bounds[2][0], Z - 1 - bounds[2][1]
             lesion_im = tio.Crop(cropping=(x_l, x_r, y_l, y_r, z_l, z_r))(lesion_im)
-            print(lesion_im)
-            # We need to pad or crop the lesion to ensure in the X and Y dimensions it matches the subject
-            lesion_im = tio.CropOrPad(target_shape=(subject.spatial_shape[0],subject.spatial_shape[1],lesion_im.shape[-1]))(lesion_im)
-            print(lesion_im)
 
             if lesion_im is None:
                 continue
@@ -377,6 +365,45 @@ class LesionSCynth(tio.Transform):
             # Choose a random z-location for the lesion
             z = self.get_target_position(subject, lesion_im)
             print(f'Inserting lesion at z={z} with shape {lesion_im.shape}')
+
+            # Now we create an empty label with the XY shape of the image and the Z shape of the lesion
+            lesion_im = tio.LabelMap(tensor=torch.zeros((1, subject.spatial_shape[0], subject.spatial_shape[1], lesion_im.shape[-1])))
+            # We found the center of the spinal cord in XY in the Z chunk of the lesion
+            sc_center = center_of_mass(subject.sc_seg.data[..., z:z+lesion_im.shape[-1]].numpy())
+            
+            
+            #######################
+            ###### J'en etais la ######
+            #### IL FAUT PLACER LE LESION_IM A LA POSITION SC_CENTER DANS LE XY DU SUJET ####
+            #######################
+
+
+
+
+            # Now we compute the avg sc x_width and y_width in this chunk
+            sc_x_width = 0
+            sc_y_width = 0
+            for zz in range(z, z+lesion_im.shape[-1]):
+                sc_slice = subject.sc_seg.data[..., zz].numpy()[0]
+                if sc_slice.sum() == 0:
+                    continue
+                bounds = get_bbox_bounds(sc_slice)
+                sc_x_width += bounds[0][1] - bounds[0][0] + 1
+                sc_y_width += bounds[1][1] - bounds[1][0] + 1
+            sc_x_width = sc_x_width / lesion_im.shape[-1]
+            sc_y_width = sc_y_width / lesion_im.shape[-1]
+            print(f"sc_x_width: {sc_x_width}, sc_y_width: {sc_y_width}")
+
+            # Now we place the lesion a
+            print("sc_center")
+            print(sc_center)
+
+            print(lesion_im)
+            # We need to pad or crop the lesion to ensure in the X and Y dimensions it matches the subject
+            lesion_im = tio.CropOrPad(target_shape=(subject.spatial_shape[0],subject.spatial_shape[1],lesion_im.shape[-1]))(lesion_im)
+            print(lesion_im)
+
+            
 
             if len(self.modalities) == 1:
                 lesion_im.set_data(self.dilate_erode_mask(lesion_im.data))
