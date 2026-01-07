@@ -305,7 +305,12 @@ class LesionSCynth(tio.Transform):
         Returns:
             z: the z index where the lesion will be inserted into the input image in subject.
         """
-        return random.randint(0, subject.spatial_shape[-1] - lesion_im.shape[-1])
+        while True:
+            z = random.randint(0, subject.spatial_shape[-1] - lesion_im.shape[-1])
+            # Ensure that there is some spinal cord in this region
+            if subject.sc_seg.data[..., z:z+lesion_im.shape[-1]].sum() > 0:
+                break
+        return z
 
     def apply_transform(self, subject: tio.Subject) -> tio.Subject:
         """
@@ -332,12 +337,8 @@ class LesionSCynth(tio.Transform):
         n_lesions = 1
 
         # Reorient the image to RAS
-        print(subject)
-        print(subject.image)
         subject.image = tio.ToOrientation('RAS')(subject.image)
         subject.sc_seg = tio.ToOrientation('RAS')(subject.sc_seg)
-        print(subject)
-        print(subject.image)
 
         for _ in range(n_lesions):
             print(subject.image)
@@ -367,43 +368,56 @@ class LesionSCynth(tio.Transform):
             print(f'Inserting lesion at z={z} with shape {lesion_im.shape}')
 
             # Now we create an empty label with the XY shape of the image and the Z shape of the lesion
-            lesion_im = tio.LabelMap(tensor=torch.zeros((1, subject.spatial_shape[0], subject.spatial_shape[1], lesion_im.shape[-1])))
+            lesion_im_padded = deepcopy(lesion_im)
+            lesion_im_padded.data = torch.zeros((1, subject.spatial_shape[0], subject.spatial_shape[1], lesion_im.shape[-1]))
             # We found the center of the spinal cord in XY in the Z chunk of the lesion
             sc_center = center_of_mass(subject.sc_seg.data[..., z:z+lesion_im.shape[-1]].numpy())
-            
-            
-            #######################
-            ###### J'en etais la ######
-            #### IL FAUT PLACER LE LESION_IM A LA POSITION SC_CENTER DANS LE XY DU SUJET ####
-            #######################
+            print("sc_center", sc_center)
 
-
-
-
-            # Now we compute the avg sc x_width and y_width in this chunk
-            sc_x_width = 0
-            sc_y_width = 0
-            for zz in range(z, z+lesion_im.shape[-1]):
-                sc_slice = subject.sc_seg.data[..., zz].numpy()[0]
-                if sc_slice.sum() == 0:
-                    continue
-                bounds = get_bbox_bounds(sc_slice)
-                sc_x_width += bounds[0][1] - bounds[0][0] + 1
-                sc_y_width += bounds[1][1] - bounds[1][0] + 1
-            sc_x_width = sc_x_width / lesion_im.shape[-1]
-            sc_y_width = sc_y_width / lesion_im.shape[-1]
+            # We now compute the bounds of the sc in the chunk:
+            sc_chunk = subject.sc_seg.data[0, ..., z:z+lesion_im.shape[-1]].numpy()
+            bounds = get_bbox_bounds(sc_chunk)
+            sc_x_width = bounds[0][1] - bounds[0][0] + 1
+            sc_y_width = bounds[1][1] - bounds[1][0] + 1
             print(f"sc_x_width: {sc_x_width}, sc_y_width: {sc_y_width}")
 
-            # Now we place the lesion a
-            print("sc_center")
-            print(sc_center)
+            # Now we find the lesion widths in X and Y
+            lesion_bounds = get_bbox_bounds(lesion_im.data[0].numpy())
+            lesion_x_width = lesion_bounds[0][1] - lesion_bounds[0][0] + 1
+            lesion_y_width = lesion_bounds[1][1] - lesion_bounds[1][0] + 1
+            print(f"lesion_x_width: {lesion_x_width}, lesion_y_width: {lesion_y_width}")
 
-            print(lesion_im)
-            # We need to pad or crop the lesion to ensure in the X and Y dimensions it matches the subject
-            lesion_im = tio.CropOrPad(target_shape=(subject.spatial_shape[0],subject.spatial_shape[1],lesion_im.shape[-1]))(lesion_im)
-            print(lesion_im)
+            # The lesion is centered on the spinal cord with an offset in X and Y so that 0.5 lesion_width + offset <= 0.5 sc_width
+            max_x_offset = max(0, (sc_x_width - lesion_x_width) // 2)
+            max_y_offset = max(0, (sc_y_width - lesion_y_width) // 2)
+            x_offset = random.randint(-max_x_offset, max_x_offset)
+            y_offset = random.randint(-max_y_offset, max_y_offset)
+            print(f"x_offset: {x_offset}, y_offset: {y_offset}")
+            lesion_center = np.copy(sc_center)
+            lesion_center[1] += x_offset
+            lesion_center[2] += y_offset
+            # Round lesion center to nearest integer
+            lesion_center = [int(round(c)) for c in lesion_center]
+            print("lesion_center", lesion_center)
 
-            
+            # Now we compute the lesion center for the cropped lesion
+            lesion_center_ini = center_of_mass(lesion_im.data.numpy())
+            lesion_center_ini = [int(round(c)) for c in lesion_center_ini]
+            print("lesion_center_ini", lesion_center_ini)
+
+            # Compute lesion displacement:
+            displacement_x = lesion_center[1] - lesion_center_ini[1]
+            displacement_y = lesion_center[2] - lesion_center_ini[2]
+
+            # Now we copy the lesion into the padded lesion tensor
+            lesion_im_padded.data[
+                :,
+                displacement_x:displacement_x + lesion_im.shape[1],
+                displacement_y:displacement_y + lesion_im.shape[2],
+                :
+            ] = lesion_im.data
+            print(lesion_im_padded)
+            lesion_im = lesion_im_padded
 
             if len(self.modalities) == 1:
                 lesion_im.set_data(self.dilate_erode_mask(lesion_im.data))
@@ -422,55 +436,9 @@ class LesionSCynth(tio.Transform):
                 # Add the lesion to the segmentation mask
                 subject['segmentation'].data[..., z:z+lesion_im.shape[-1]] = deepcopy(lesion_im.data)
 
-            # else:
-            #     # Multimodality case
-            #     count = 0
-            #     # Insert the lesion in a random subset of modalities, augmenting the mask each time, and only
-            #     # add to the segmentation mask if the lesion has been inserted into at least two modalities
-            #     # Note that the transforms used here should be minimal, as they will be applied independently to the mask
-            #     # applied to each modality, and we need to ensure that the inserted lesion overlaps in both!
-            #     for modality in self.modalities:
-            #         if random.random() < self.multimodality_probability:
-            #             lesion_copy = deepcopy(lesion_im)
-            #             lesion_copy.set_data( self.dilate_erode_mask(lesion_copy.data))
-            #             # Apply other transforms if provided (e.g. rotate, scale, etc.)
-            #             if self.other_transforms is not None:
-            #                 lesion_copy = self.other_transforms(lesion_copy)
-
-            #             rand = random.random()
-            #             if rand < self.multimodality_probability:
-            #                 if rand < self.multimodality_probability / 2:
-            #                     if lesion_copy.data.sum() > 100:
-            #                         lesion_copy.set_data(torch.Tensor(morph.opening(lesion_copy.data[0],
-            #                                                                       footprint=np.ones((3, 3, 3)))
-            #                                                         ).unsqueeze(0))
-            #                 else:
-            #                     lesion_copy.set_data(torch.Tensor(morph.closing(lesion_copy.data[0],
-            #                                                                   footprint=np.ones((5, 5, 5)))
-            #                                                     ).unsqueeze(0))
-
-            #             if lesion_copy.data.sum() == 0:
-            #                 continue
-
-            #             # Get Gaussian or constant intensity increase
-            #             intensity_kernel, factor, sigma = self.get_intensity_increase(lesion_copy)
-            #             # Increase the intensity by the Gaussian (or constant) within the lesion mask area
-            #             subject = self.update_intensity(subject, lesion_copy, intensity_kernel, modality, z)
-
-            #             if count == 0:
-            #                 # Keep the lesion mask for the first modality with the added lesion
-            #                 lesion_mask = lesion_copy.data
-
-            #             count += 1
-
-            #     # Add the lesion to the segmentation mask if it has been inserted into at least two modalities
-            #     if count >= 2:
-            #         subject['segmentation'].data[..., z:z+lesion_mask.shape[-1]][lesion_mask == 1] = 1
-
         # Ensure to remove any parts of mask outside spinal cord (as we have not increased the intensity)
-        print("lesion volume before masking:", subject['segmentation'].data.sum().item())
-        # subject['segmentation'].set_data(subject['segmentation'].data * subject['sc_seg'].data)
-        print("lesion volume after masking:", subject['segmentation'].data.sum().item())
+        subject['segmentation'].set_data(subject['segmentation'].data * subject['sc_seg'].data)
+        print("segmentation", subject.segmentation)
 
         if self.blur_radius is not None:
             for modality in self.modalities:
@@ -936,7 +904,9 @@ if __name__ == '__main__':
     # Load an example subject
     example_im = tio.ScalarImage(args.example_im_path)
     example_seg = tio.LabelMap(args.seg_path) if args.seg_path else tio.LabelMap(
-        tensor=torch.zeros_like(example_im.data, dtype=torch.uint8))
+        tensor=torch.zeros_like(example_im.data, dtype=torch.uint8),
+        affine=example_im.affine
+    )
     example_sc_seg = tio.LabelMap(args.sc_seg_path) if args.sc_seg_path else tio.LabelMap(
         tensor=torch.ones_like(example_im.data, dtype=torch.uint8))
 
@@ -962,25 +932,10 @@ if __name__ == '__main__':
     augmented_subject = synth(subject)
 
     # Save the augmented image and segmentation mask
-    if args.out_dir is not None:
-        args.out_dir.mkdir(parents=True, exist_ok=True)
-        out_im_path = os.path.join(args.out_dir, f'{augmented_subject["name"].split("/")[-1]}_aug.nii.gz')
-        out_seg_path = os.path.join(args.out_dir, f'{augmented_subject["name"].split("/")[-1]}_aug_seg.nii.gz')
-        augmented_subject['image'].save(out_im_path)
-        augmented_subject['segmentation'].save(out_seg_path)
-        print(f'Saved augmented image to {out_im_path} and segmentation mask to {out_seg_path}')
-    else:
-        # Plot the augmented image and segmentation mask
-        fig, axes = plt.subplots(1, 2, figsize=(6, 10))
-        plt.subplots_adjust(wspace=0, hspace=0)  # remove space between subplots
-        fig.subplots_adjust(0, 0.02, 1, 0.9)  # remove margins
-        mid_slice_ix = augmented_subject['segmentation'].data.shape[1] // 2
-        axes[0].imshow(augmented_subject['image'].data.numpy()[0, mid_slice_ix, :, ::-1].T,
-                       cmap='gray')
-        axes[0].set_title('Augmented Image')
-        axes[1].imshow(augmented_subject['segmentation'].data.numpy()[0, mid_slice_ix, :, ::-1].T,
-                       cmap='gray')
-        axes[1].set_title('Augmented Seg Mask')
-        axes[0].axis('off')
-        axes[1].axis('off')
-        plt.show()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    out_im_path = os.path.join(args.out_dir, f'{augmented_subject["name"].split("/")[-1]}_aug.nii.gz')
+    out_seg_path = os.path.join(args.out_dir, f'{augmented_subject["name"].split("/")[-1]}_aug_seg.nii.gz')
+    augmented_subject['image'].save(out_im_path)
+    augmented_subject['segmentation'].save(out_seg_path)
+    print(f'Saved augmented image to {out_im_path} and segmentation mask to {out_seg_path}')
+    
