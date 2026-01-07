@@ -215,7 +215,7 @@ class LesionSCynth(tio.Transform):
                 mask_data = torch.Tensor(morph.binary_erosion(mask_data[0], footprint=structuring_element)).unsqueeze(0)
         return mask_data
 
-    def apply_blur(self, inp: torch.Tensor, seg: torch.Tensor) -> torch.Tensor:
+    def apply_blur(self, inp: torch.Tensor, seg: torch.Tensor, sc_seg: torch.Tensor) -> torch.Tensor:
         if self.blur_radius is None:
             return inp
 
@@ -227,7 +227,12 @@ class LesionSCynth(tio.Transform):
         blurred = scipy.ndimage.gaussian_filter(inp, sigma=self.blur_sigma, radius=self.blur_radius)
 
         # Only keep the blurred values within the dilated segmentation mask
-        return inp * (1 - dilated_seg) + torch.Tensor(blurred) * dilated_seg
+        new_inp =  inp * (1 - dilated_seg) + torch.Tensor(blurred) * dilated_seg * sc_seg
+
+        # Now for all values equal to 0, we replace them by their previous value (to avoid black holes)
+        new_inp[new_inp == 0] = inp[new_inp == 0]
+
+        return new_inp
 
     def get_intensity_increase(self, lesion_im: tio.LabelMap) -> Tuple[torch.Tensor, float, Optional[float]]:
         """ Get the intensity increase factor for the lesion. If self.gaussian_spatial is True, the intensity increase
@@ -442,7 +447,7 @@ class LesionSCynth(tio.Transform):
 
         if self.blur_radius is not None:
             for modality in self.modalities:
-                subject[modality].set_data(self.apply_blur(subject[modality].data, subject['segmentation'].data))
+                subject[modality].set_data(self.apply_blur(subject[modality].data, subject['segmentation'].data, subject['sc_seg'].data))
 
         return subject
 
@@ -900,6 +905,12 @@ if __name__ == '__main__':
     parser.add_argument('--method', type=str, choices=['LSC', 'LM', 'lesionscynth', 'lesionmix'],
                         default='lesionscynth', help='Method to use for data augmentation.')
     args = parser.parse_args()
+
+    # Fix a seed to ensure reproducibility
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
     # Load an example subject
     example_im = tio.ScalarImage(args.example_im_path)
